@@ -7,6 +7,7 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Display};
 use std::hash::{Hash, Hasher};
 use std::ops::{Deref, DerefMut};
+use std::sync::OnceLock;
 
 use chrono::{DateTime, Local as LocalTz};
 use humansize::{format_size, DECIMAL};
@@ -165,6 +166,37 @@ fn hash_event_id(event_id: &EventId) -> Option<usize> {
     hash_finish_usize(hasher)
 }
 
+/// Run the configured external timestamp formatter, returning its trimmed stdout on success.
+///
+/// The command is invoked with the message time as a single argument, expressed as the number
+/// of milliseconds since the Unix epoch in the local timezone.
+fn format_timestamp_with_command(
+    cmd: &[String],
+    dt: DateTime<LocalTz>,
+) -> Option<String> {
+    use std::process::Command;
+
+    let (program, extra_args) = cmd.split_first()?;
+    let millis = dt.timestamp_millis().to_string();
+
+    let output = Command::new(program)
+        .args(extra_args)
+        .arg(&millis)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
 /// Before the image is loaded, already display a placeholder frame of the image size.
 fn placeholder_frame(
     text: Option<&str>,
@@ -238,18 +270,6 @@ impl MessageTimeStamp {
         let time = self.as_datetime().format("%A, %B %d %Y").to_string();
 
         Span::styled(time, BOLD_STYLE).into()
-    }
-
-    fn show_time(&self) -> Option<Span<'_>> {
-        match self {
-            MessageTimeStamp::OriginServer(ms) => {
-                let time = millis_to_datetime(*ms).format("%T");
-                let time = format!("  [{time}]");
-
-                Span::raw(time).into()
-            },
-            MessageTimeStamp::LocalEcho => None,
-        }
     }
 
     fn is_local_echo(&self) -> bool {
@@ -855,6 +875,7 @@ pub struct Message {
     pub downloaded: bool,
     pub html: Option<StyleTree>,
     pub image_preview: ImageStatus,
+    cached_formatted_time: OnceLock<String>,
 }
 
 impl Message {
@@ -869,6 +890,25 @@ impl Message {
             downloaded,
             html,
             image_preview: ImageStatus::None,
+            cached_formatted_time: OnceLock::new(),
+        }
+    }
+
+    fn formatted_time(&self, settings: &ApplicationSettings) -> Option<Span<'_>> {
+        match self.timestamp {
+            MessageTimeStamp::OriginServer(ms) => {
+                let time_str = self.cached_formatted_time.get_or_init(|| {
+                    let dt = millis_to_datetime(ms);
+                    if let Some(cmd) = &settings.tunables.timestamp_command {
+                        if let Some(formatted) = format_timestamp_with_command(cmd, dt) {
+                            return format!("  [{formatted}]");
+                        }
+                    }
+                    format!("  [{}]", dt.format("%T"))
+                });
+                Span::raw(time_str.as_str()).into()
+            },
+            MessageTimeStamp::LocalEcho => None,
         }
     }
 
@@ -953,7 +993,7 @@ impl Message {
             let cols = MessageColumns::Four;
             let fill = width - user_gutter - TIME_GUTTER - READ_GUTTER;
             let user = self.show_sender(prev, true, info, settings);
-            let time = self.timestamp.show_time();
+            let time = self.formatted_time(settings);
             let read = info
                 .event_receipts
                 .values()
@@ -967,7 +1007,7 @@ impl Message {
             let cols = MessageColumns::Three;
             let fill = width - user_gutter - TIME_GUTTER;
             let user = self.show_sender(prev, true, info, settings);
-            let time = self.timestamp.show_time();
+            let time = self.formatted_time(settings);
             let read = Vec::new();
 
             MessageFormatter { settings, cols, orig, fill, user, date, time, read }

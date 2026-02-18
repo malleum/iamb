@@ -173,6 +173,7 @@ pub fn mock_tunables() -> TunableValues {
         log_level: Level::INFO,
         message_shortcode_display: false,
         normal_after_send: true,
+        timestamp_command: None,
         reaction_display: true,
         reaction_shortcode_display: false,
         read_receipt_send: true,

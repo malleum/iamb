@@ -230,7 +230,7 @@ fn placeholder_frame(
 }
 
 #[inline]
-fn millis_to_datetime(ms: UInt) -> DateTime<LocalTz> {
+pub(crate) fn millis_to_datetime(ms: UInt) -> DateTime<LocalTz> {
     let time = i64::from(ms) / 1000;
     let time = DateTime::from_timestamp(time, 0).unwrap_or_default();
     time.into()

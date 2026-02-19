@@ -1298,6 +1298,16 @@ impl StatefulWidget for Scrollback<'_> {
     type State = ScrollbackState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        // Consume any pending scrollback jump from the search results window.
+        if let Some((room_id, key)) = self.store.application.pending_scrollback_jump.take() {
+            if room_id == state.room_id {
+                state.goto_message(key);
+            } else {
+                // Not for this room, put it back.
+                self.store.application.pending_scrollback_jump = Some((room_id, key));
+            }
+        }
+
         let info = self.store.application.rooms.get_or_default(state.room_id.clone());
         let settings = &self.store.application.settings;
         let area = if state.cursor.timestamp.is_some() {

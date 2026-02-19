@@ -350,6 +350,17 @@ impl RoomState {
 
                 Ok(vec![(act, cmd.context.clone())])
             },
+            RoomAction::Search(pattern, mut cmd) => {
+                store.application.pending_search_pattern = Some(pattern);
+                let width = Count::Exact(45);
+                let act =
+                    cmd.default_axis(Axis::Vertical).default_relation(MoveDir1D::Next).window(
+                        OpenTarget::Application(IambId::SearchResults(self.id().to_owned())),
+                        width.into(),
+                    );
+
+                Ok(vec![(act, cmd.context.clone())])
+            },
             RoomAction::SetDirect(is_direct) => {
                 let room = store
                     .application

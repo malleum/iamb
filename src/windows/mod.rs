@@ -20,6 +20,7 @@ use matrix_sdk::{
         events::tag::{TagName, Tags},
         OwnedRoomAliasId,
         OwnedRoomId,
+        OwnedUserId,
         RoomAliasId,
         RoomId,
     },
@@ -70,6 +71,7 @@ use crate::base::{
     ProgramContext,
     ProgramStore,
     RoomAction,
+    RoomFetchStatus,
     SendAction,
     SortColumn,
     SortFieldRoom,
@@ -80,7 +82,7 @@ use crate::base::{
 };
 
 use self::{room::RoomState, welcome::WelcomeState};
-use crate::message::MessageTimeStamp;
+use crate::message::{MessageKey, MessageTimeStamp};
 use feruca::Collator;
 
 pub mod room;
@@ -323,6 +325,7 @@ macro_rules! delegate {
             IambWindow::Room($id) => $e,
             IambWindow::DirectList($id) => $e,
             IambWindow::MemberList($id, _, _) => $e,
+            IambWindow::SearchResults($id, _, _) => $e,
             IambWindow::RoomList($id) => $e,
             IambWindow::SpaceList($id) => $e,
             IambWindow::VerifyList($id) => $e,
@@ -337,6 +340,7 @@ pub enum IambWindow {
     DirectList(DirectListState),
     MemberList(MemberListState, OwnedRoomId, Option<Instant>),
     Room(RoomState),
+    SearchResults(SearchResultsListState, OwnedRoomId, String),
     VerifyList(VerifyListState),
     RoomList(RoomListState),
     SpaceList(SpaceListState),
@@ -413,6 +417,7 @@ pub type RoomListState = ListState<RoomItem, IambInfo>;
 pub type ChatListState = ListState<GenericChatItem, IambInfo>;
 pub type UnreadListState = ListState<GenericChatItem, IambInfo>;
 pub type SpaceListState = ListState<SpaceItem, IambInfo>;
+pub type SearchResultsListState = ListState<SearchResultItem, IambInfo>;
 pub type VerifyListState = ListState<VerifyItem, IambInfo>;
 
 impl From<ChatListState> for IambWindow {
@@ -682,6 +687,57 @@ impl WindowOps<IambInfo> for IambWindow {
                     .render(area, buf, state);
             },
             IambWindow::Welcome(state) => state.draw(area, buf, focused, store),
+            IambWindow::SearchResults(state, room_id, pattern) => {
+                // Re-run the search over all currently loaded messages.
+                if let Ok(needle) = regex::Regex::new(pattern) {
+                    let info =
+                        store.application.rooms.get_or_default(room_id.clone());
+                    let mut items = Vec::new();
+                    if let Some(thread) = info.get_thread(None) {
+                        for (key, msg) in thread.iter() {
+                            let body = msg.event.body();
+                            if needle.is_match(&body) {
+                                items.push(SearchResultItem::new(
+                                    key.clone(),
+                                    msg.sender.clone(),
+                                    body.into_owned(),
+                                    room_id.clone(),
+                                ));
+                            }
+                        }
+                    }
+                    state.set(items);
+
+                    // Request more history if not done loading.
+                    let still_loading =
+                        !matches!(info.fetch_id, RoomFetchStatus::Done);
+                    if still_loading {
+                        store
+                            .application
+                            .need_load
+                            .need_messages(room_id.clone());
+                    }
+                }
+
+                let info =
+                    store.application.rooms.get_or_default(room_id.clone());
+                let still_loading =
+                    !matches!(info.fetch_id, RoomFetchStatus::Done);
+                let n = state.len();
+                let empty_msg = if still_loading {
+                    format!("Searching... ({n} results so far)")
+                } else if n == 0 {
+                    "No matching messages".to_string()
+                } else {
+                    String::new()
+                };
+
+                List::new(store)
+                    .empty_message(empty_msg)
+                    .empty_alignment(Alignment::Center)
+                    .focus(focused)
+                    .render(area, buf, state);
+            },
         }
     }
 
@@ -698,6 +754,9 @@ impl WindowOps<IambInfo> for IambWindow {
             IambWindow::Welcome(w) => w.dup(store).into(),
             IambWindow::ChatList(w) => w.dup(store).into(),
             IambWindow::UnreadList(w) => w.dup(store).into(),
+            IambWindow::SearchResults(w, room_id, pattern) => {
+                IambWindow::SearchResults(w.dup(store), room_id.clone(), pattern.clone())
+            },
         }
     }
 
@@ -739,6 +798,7 @@ impl Window<IambInfo> for IambWindow {
             IambWindow::Welcome(_) => IambId::Welcome,
             IambWindow::ChatList(_) => IambId::ChatList,
             IambWindow::UnreadList(_) => IambId::UnreadList,
+            IambWindow::SearchResults(_, room_id, _) => IambId::SearchResults(room_id.clone()),
         }
     }
 
@@ -767,6 +827,19 @@ impl Window<IambInfo> for IambWindow {
                 ];
                 Line::from(v)
             },
+            IambWindow::SearchResults(state, room_id, _) => {
+                let title = store.application.get_room_title(room_id.as_ref());
+                let info = store.application.rooms.get_or_default(room_id.clone());
+                let still_loading = !matches!(info.fetch_id, RoomFetchStatus::Done);
+                let n = state.len();
+                let suffix = if still_loading { "..." } else { "" };
+                let v = vec![
+                    bold_span("Search Results "),
+                    Span::styled(format!("({n}{suffix}): "), bold_style()),
+                    title.into(),
+                ];
+                Line::from(v)
+            },
         }
     }
 
@@ -787,6 +860,19 @@ impl Window<IambInfo> for IambWindow {
                 let v = vec![
                     bold_span("Room Members "),
                     Span::styled(format!("({n}): "), bold_style()),
+                    title.into(),
+                ];
+                Line::from(v)
+            },
+            IambWindow::SearchResults(state, room_id, _) => {
+                let title = store.application.get_room_title(room_id.as_ref());
+                let info = store.application.rooms.get_or_default(room_id.clone());
+                let still_loading = !matches!(info.fetch_id, RoomFetchStatus::Done);
+                let n = state.len();
+                let suffix = if still_loading { "..." } else { "" };
+                let v = vec![
+                    bold_span("Search Results "),
+                    Span::styled(format!("({n}{suffix}): "), bold_style()),
                     title.into(),
                 ];
                 Line::from(v)
@@ -844,6 +930,19 @@ impl Window<IambInfo> for IambWindow {
                 let list = UnreadListState::new(IambBufferId::UnreadList, vec![]);
 
                 Ok(IambWindow::UnreadList(list))
+            },
+            IambId::SearchResults(room_id) => {
+                let id = IambBufferId::SearchResults(room_id.clone());
+                let pattern = store
+                    .application
+                    .pending_search_pattern
+                    .take()
+                    .unwrap_or_default();
+
+                // Don't eagerly search; the draw loop will progressively
+                // search as more history is loaded.
+                let list = SearchResultsListState::new(id, vec![]);
+                Ok(IambWindow::SearchResults(list, room_id, pattern))
             },
         }
     }
@@ -1614,6 +1713,115 @@ impl Promptable<ProgramContext, ProgramStore, IambInfo> for MemberItem {
                 let msg = "Cannot recall history inside a list";
                 let err = EditError::Failure(msg.into());
 
+                Err(err)
+            },
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct SearchResultItem {
+    room_id: OwnedRoomId,
+    key: MessageKey,
+    sender: OwnedUserId,
+    body: String,
+}
+
+impl SearchResultItem {
+    fn new(
+        key: MessageKey,
+        sender: OwnedUserId,
+        body: String,
+        room_id: OwnedRoomId,
+    ) -> Self {
+        Self { room_id, key, sender, body }
+    }
+}
+
+impl Display for SearchResultItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.body)
+    }
+}
+
+impl ListItem<IambInfo> for SearchResultItem {
+    fn show(
+        &self,
+        selected: bool,
+        _: &ViewportContext<ListCursor>,
+        store: &mut ProgramStore,
+    ) -> Text<'_> {
+        let mut style = Style::default();
+        if selected {
+            style = style.add_modifier(StyleModifier::REVERSED);
+        }
+
+        let (color, name) = store.application.settings.get_user_overrides(&self.sender);
+        let color = color.unwrap_or_else(|| super::config::user_color(self.sender.as_str()));
+        let sender_style = super::config::user_style_from_color(color);
+        let sender_style = if selected {
+            sender_style.add_modifier(StyleModifier::REVERSED)
+        } else {
+            sender_style
+        };
+
+        let info = store.application.rooms.get_or_default(self.room_id.clone());
+        let sender_name: String = if let Some(n) = name {
+            n.into_owned()
+        } else if let Some(dn) = info.display_names.get(&self.sender) {
+            dn.clone()
+        } else {
+            self.sender.localpart().to_string()
+        };
+
+        let time = match &self.key.0 {
+            MessageTimeStamp::OriginServer(ms) => {
+                let dt = crate::message::millis_to_datetime(*ms);
+                dt.format("%Y-%m-%d %H:%M").to_string()
+            },
+            MessageTimeStamp::LocalEcho => "pending".to_string(),
+        };
+
+        let header = Line::from(vec![
+            Span::styled(sender_name, sender_style),
+            Span::styled(format!("  [{time}]"), style),
+        ]);
+
+        let body = Line::from(Span::styled(self.body.as_str(), style));
+
+        Text::from(vec![header, body])
+    }
+
+    fn get_word(&self) -> Option<String> {
+        self.key.1.to_string().into()
+    }
+
+    fn matches(&self, needle: &regex::Regex) -> bool {
+        needle.is_match(&self.body)
+    }
+}
+
+impl Promptable<ProgramContext, ProgramStore, IambInfo> for SearchResultItem {
+    fn prompt(
+        &mut self,
+        act: &PromptAction,
+        _: &ProgramContext,
+        store: &mut ProgramStore,
+    ) -> EditResult<Vec<(ProgramAction, ProgramContext)>, IambInfo> {
+        match act {
+            PromptAction::Submit => {
+                store.application.pending_scrollback_jump =
+                    Some((self.room_id.clone(), self.key.clone()));
+                Ok(vec![])
+            },
+            PromptAction::Abort(_) => {
+                let msg = "Cannot abort entry inside a list";
+                let err = EditError::Failure(msg.into());
+                Err(err)
+            },
+            PromptAction::Recall(..) => {
+                let msg = "Cannot recall history inside a list";
+                let err = EditError::Failure(msg.into());
                 Err(err)
             },
         }

@@ -297,6 +297,21 @@ fn iamb_replied(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     return Ok(step);
 }
 
+fn iamb_search(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    let pattern = desc.arg.text.trim().to_string();
+
+    if pattern.is_empty() {
+        return Result::Err(CommandError::Error(
+            "Usage: :search <pattern>".into(),
+        ));
+    }
+
+    let open = IambAction::Room(RoomAction::Search(pattern, ctx.clone().into()));
+    let step = CommandStep::Continue(open.into(), ctx.context.clone());
+
+    return Ok(step);
+}
+
 fn iamb_editor(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     if !desc.arg.text.is_empty() {
         return Result::Err(CommandError::InvalidArgument);
@@ -787,6 +802,11 @@ fn add_iamb_commands(cmds: &mut ProgramCommands) {
         name: "rooms".into(),
         aliases: vec![],
         f: iamb_rooms,
+    });
+    cmds.add_command(ProgramCommand {
+        name: "search".into(),
+        aliases: vec![],
+        f: iamb_search,
     });
     cmds.add_command(ProgramCommand { name: "room".into(), aliases: vec![], f: iamb_room });
     cmds.add_command(ProgramCommand {

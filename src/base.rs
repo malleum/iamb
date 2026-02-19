@@ -459,6 +459,9 @@ pub enum RoomAction {
     /// Open the members window.
     Members(Box<CommandContext>),
 
+    /// Search messages and open a results window.
+    Search(String, Box<CommandContext>),
+
     /// Set whether a room is a direct message.
     SetDirect(bool),
 
@@ -1618,6 +1621,12 @@ pub struct ChatStore {
 
     /// Notifications that should be dismissed when the user opens the room.
     pub open_notifications: HashMap<OwnedRoomId, Vec<NotificationHandle>>,
+
+    /// Pending search pattern for the search results window to consume on open.
+    pub pending_search_pattern: Option<String>,
+
+    /// Pending scrollback jump target set by search results, consumed by scrollback render.
+    pub pending_scrollback_jump: Option<(OwnedRoomId, MessageKey)>,
 }
 
 impl ChatStore {
@@ -1643,6 +1652,8 @@ impl ChatStore {
             ring_bell: false,
             focused: true,
             open_notifications: Default::default(),
+            pending_search_pattern: None,
+            pending_scrollback_jump: None,
         }
     }
 
@@ -1715,6 +1726,9 @@ pub enum IambId {
 
     /// The `:unreads` window.
     UnreadList,
+
+    /// The `:search` results window for a given Matrix room.
+    SearchResults(OwnedRoomId),
 }
 
 impl Display for IambId {
@@ -1736,6 +1750,9 @@ impl Display for IambId {
             IambId::Welcome => f.write_str("iamb://welcome"),
             IambId::ChatList => f.write_str("iamb://chats"),
             IambId::UnreadList => f.write_str("iamb://unreads"),
+            IambId::SearchResults(room_id) => {
+                write!(f, "iamb://search/{room_id}")
+            },
         }
     }
 }
@@ -1874,6 +1891,21 @@ impl Visitor<'_> for IambIdVisitor {
 
                 Ok(IambId::UnreadList)
             },
+            Some("search") => {
+                let Some(path) = url.path_segments() else {
+                    return Err(E::custom("Invalid search results window URL"));
+                };
+
+                let &[room_id] = path.collect::<Vec<_>>().as_slice() else {
+                    return Err(E::custom("Invalid search results window URL"));
+                };
+
+                let Ok(room_id) = OwnedRoomId::try_from(room_id) else {
+                    return Err(E::custom("Invalid room identifier"));
+                };
+
+                Ok(IambId::SearchResults(room_id))
+            },
             Some(s) => Err(E::custom(format!("{s:?} is not a valid window"))),
             None => Err(E::custom("Invalid iamb window URL")),
         }
@@ -1944,6 +1976,9 @@ pub enum IambBufferId {
 
     /// The `:unreads` window.
     UnreadList,
+
+    /// The `:search` results window for a room.
+    SearchResults(OwnedRoomId),
 }
 
 impl IambBufferId {
@@ -1960,6 +1995,7 @@ impl IambBufferId {
             IambBufferId::Welcome => IambId::Welcome,
             IambBufferId::ChatList => IambId::ChatList,
             IambBufferId::UnreadList => IambId::UnreadList,
+            IambBufferId::SearchResults(room) => IambId::SearchResults(room.clone()),
         };
 
         Some(id)
@@ -2004,6 +2040,7 @@ impl Completer<IambInfo> for IambCompleter {
             IambBufferId::Welcome => vec![],
             IambBufferId::ChatList => vec![],
             IambBufferId::UnreadList => vec![],
+            IambBufferId::SearchResults(_) => vec![],
         }
     }
 }

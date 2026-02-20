@@ -666,6 +666,47 @@ fn iamb_space(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     return Ok(step);
 }
 
+fn iamb_vote(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    let text = desc.arg.text.trim().to_string();
+
+    if text.is_empty() {
+        return Err(CommandError::Error(
+            "Usage: :vote <number> or :vote <option text>".into(),
+        ));
+    }
+
+    let mact = IambAction::from(MessageAction::Vote(text));
+    let step = CommandStep::Continue(mact.into(), ctx.context.clone());
+
+    return Ok(step);
+}
+
+fn iamb_poll(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    let text = desc.arg.text.trim().to_string();
+
+    if text.is_empty() {
+        return Err(CommandError::Error(
+            "Usage: :poll <question> | <option1> | <option2> [| ...]".into(),
+        ));
+    }
+
+    let parts: Vec<String> = text.split('|').map(|s| s.trim().to_string()).collect();
+
+    if parts.len() < 3 {
+        return Err(CommandError::Error(
+            "A poll requires a question and at least 2 options, separated by |".into(),
+        ));
+    }
+
+    let question = parts[0].clone();
+    let options = parts[1..].to_vec();
+
+    let sact = IambAction::from(SendAction::Poll(question, options));
+    let step = CommandStep::Continue(sact.into(), ctx.context.clone());
+
+    return Ok(step);
+}
+
 fn iamb_upload(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     let mut args = desc.arg.strings()?;
 
@@ -838,6 +879,16 @@ fn add_iamb_commands(cmds: &mut ProgramCommands) {
         name: "verify".into(),
         aliases: vec![],
         f: iamb_verify,
+    });
+    cmds.add_command(ProgramCommand {
+        name: "vote".into(),
+        aliases: vec![],
+        f: iamb_vote,
+    });
+    cmds.add_command(ProgramCommand {
+        name: "poll".into(),
+        aliases: vec![],
+        f: iamb_poll,
     });
     cmds.add_command(ProgramCommand {
         name: "welcome".into(),

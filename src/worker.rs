@@ -44,6 +44,9 @@ use matrix_sdk::{
                 start::{OriginalSyncKeyVerificationStartEvent, ToDeviceKeyVerificationStartEvent},
                 VerificationMethod,
             },
+            poll::unstable_end::UnstablePollEndEventContent,
+            poll::unstable_response::UnstablePollResponseEventContent,
+            poll::unstable_start::UnstablePollStartEventContent,
             presence::PresenceEvent,
             reaction::ReactionEventContent,
             receipt::ReceiptType,
@@ -1045,6 +1048,89 @@ impl ClientWorker {
                     let info = locked.application.get_room_info(room_id.to_owned());
                     update_event_receipts(info, &room, ev.event_id()).await;
                     info.insert_reaction(ev.into_full_event(room_id.to_owned()));
+                }
+            },
+        );
+
+        let _ = self.client.add_event_handler(
+            |ev: SyncMessageLikeEvent<UnstablePollStartEventContent>,
+             room: MatrixRoom,
+             store: Ctx<AsyncProgramStore>| {
+                async move {
+                    let room_id = room.room_id();
+
+                    if let Some(original) = ev.as_original() {
+                        let poll_start = original.content.poll_start();
+
+                        let event_id = original.event_id.clone();
+                        let sender = original.sender.clone();
+                        let timestamp = original.origin_server_ts;
+
+                        let mut locked = store.lock().await;
+
+                        let _ = locked.application.presences.get_or_default(sender.clone());
+
+                        let info = locked.application.get_room_info(room_id.to_owned());
+                        update_event_receipts(info, &room, &event_id).await;
+
+                        info.insert_poll(event_id.clone(), poll_start);
+
+                        let poll_content = poll_start.clone();
+                        let msg_event = crate::message::MessageEvent::Poll(
+                            event_id.clone(),
+                            sender.clone(),
+                            timestamp,
+                            poll_content,
+                        );
+                        let msg = crate::message::Message::new(
+                            msg_event,
+                            sender,
+                            timestamp.into(),
+                        );
+                        let key = (timestamp.into(), event_id.clone());
+                        let loc = crate::base::EventLocation::Message(None, key.clone());
+                        info.keys.insert(event_id, loc);
+                        info.messages_mut().insert_message(key, msg);
+                    }
+                }
+            },
+        );
+
+        let _ = self.client.add_event_handler(
+            |ev: SyncMessageLikeEvent<UnstablePollResponseEventContent>,
+             room: MatrixRoom,
+             store: Ctx<AsyncProgramStore>| {
+                async move {
+                    let room_id = room.room_id();
+
+                    if let Some(original) = ev.as_original() {
+                        let mut locked = store.lock().await;
+                        let info = locked.application.get_room_info(room_id.to_owned());
+
+                        let poll_id = &original.content.relates_to.event_id;
+                        let sender = original.sender.clone();
+                        let selections = original.content.poll_response.answers.clone();
+
+                        info.insert_poll_response(poll_id, sender, selections);
+                    }
+                }
+            },
+        );
+
+        let _ = self.client.add_event_handler(
+            |ev: SyncMessageLikeEvent<UnstablePollEndEventContent>,
+             room: MatrixRoom,
+             store: Ctx<AsyncProgramStore>| {
+                async move {
+                    let room_id = room.room_id();
+
+                    if let Some(original) = ev.as_original() {
+                        let mut locked = store.lock().await;
+                        let info = locked.application.get_room_info(room_id.to_owned());
+
+                        let poll_id = &original.content.relates_to.event_id;
+                        info.end_poll(poll_id);
+                    }
                 }
             },
         );

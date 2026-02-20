@@ -1,5 +1,6 @@
 //! Window for Matrix rooms
 use std::borrow::Cow;
+use std::convert::TryInto;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::ops::Deref;
@@ -392,6 +393,7 @@ impl ChatState {
                     MessageEvent::Original(ev) => ev.event_id.clone(),
                     MessageEvent::Local(event_id, _) => event_id.clone(),
                     MessageEvent::State(ev) => ev.event_id().to_owned(),
+                    MessageEvent::Poll(event_id, _, _, _) => event_id.clone(),
                     MessageEvent::Redacted(_) => {
                         let msg = "Cannot react to a redacted message";
                         let err = UIError::Failure(msg.into());
@@ -430,6 +432,7 @@ impl ChatState {
                     MessageEvent::Original(ev) => ev.event_id.clone(),
                     MessageEvent::Local(event_id, _) => event_id.clone(),
                     MessageEvent::State(ev) => ev.event_id().to_owned(),
+                    MessageEvent::Poll(event_id, _, _, _) => event_id.clone(),
                     MessageEvent::Redacted(_) => {
                         let msg = "Cannot redact already redacted message";
                         let err = UIError::Failure(msg.into());
@@ -493,6 +496,7 @@ impl ChatState {
                     MessageEvent::Original(ev) => ev.event_id.clone(),
                     MessageEvent::Local(event_id, _) => event_id.clone(),
                     MessageEvent::State(ev) => ev.event_id().to_owned(),
+                    MessageEvent::Poll(event_id, _, _, _) => event_id.clone(),
                     MessageEvent::Redacted(_) => {
                         let msg = "Cannot unreact to a redacted message";
                         let err = UIError::Failure(msg.into());
@@ -525,6 +529,60 @@ impl ChatState {
                 for reaction in reactions {
                     let _ = room.redact(reaction, None, None).await.map_err(IambError::from)?;
                 }
+
+                Ok(None)
+            },
+            MessageAction::Vote(selection) => {
+                let event_id = msg.event.event_id().to_owned();
+                let poll = info.get_poll(&event_id).ok_or_else(|| {
+                    UIError::Failure("This message is not a poll".into())
+                })?;
+
+                if poll.ended {
+                    return Err(UIError::Failure("This poll has ended".into()));
+                }
+
+                // Resolve selection: number or name
+                let answer_id = if let Ok(n) = selection.parse::<usize>() {
+                    if n == 0 || n > poll.answers.len() {
+                        let msg = format!(
+                            "Invalid option number. Choose 1-{}",
+                            poll.answers.len()
+                        );
+                        return Err(UIError::Failure(msg));
+                    }
+                    poll.answers[n - 1].0.clone()
+                } else {
+                    // Partial case-insensitive match on answer text
+                    let lower = selection.to_lowercase();
+                    let matches: Vec<_> = poll
+                        .answers
+                        .iter()
+                        .filter(|(_, text)| text.to_lowercase().contains(&lower))
+                        .collect();
+                    match matches.len() {
+                        0 => {
+                            return Err(UIError::Failure(format!(
+                                "No option matches {:?}",
+                                selection
+                            )));
+                        },
+                        1 => matches[0].0.clone(),
+                        _ => {
+                            return Err(UIError::Failure(format!(
+                                "Ambiguous: {:?} matches multiple options",
+                                selection
+                            )));
+                        },
+                    }
+                };
+
+                let room = self.get_joined(&store.application.worker)?;
+                let response = matrix_sdk::ruma::events::poll::unstable_response::UnstablePollResponseEventContent::new(
+                    vec![answer_id],
+                    event_id,
+                );
+                let _ = room.send(response).await.map_err(IambError::from)?;
 
                 Ok(None)
             },
@@ -644,6 +702,36 @@ impl ChatState {
                 let msg = RoomMessageEventContent::new(msg);
 
                 (resp.event_id, msg)
+            },
+            SendAction::Poll(question, options) => {
+                let answers: Vec<_> = options
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| {
+                        matrix_sdk::ruma::events::poll::unstable_start::UnstablePollAnswer::new(
+                            format!("opt{}", i),
+                            text.clone(),
+                        )
+                    })
+                    .collect();
+
+                let poll_answers = answers.try_into().map_err(|_| {
+                    UIError::Failure("Invalid number of poll options (1-20 allowed)".into())
+                })?;
+
+                let poll_start = matrix_sdk::ruma::events::poll::unstable_start::UnstablePollStartContentBlock::new(
+                    question.clone(),
+                    poll_answers,
+                );
+
+                let content = matrix_sdk::ruma::events::poll::unstable_start::NewUnstablePollStartEventContent::plain_text(
+                    format!("Poll: {}", question),
+                    poll_start,
+                );
+
+                let _ = room.send(content).await.map_err(IambError::from)?;
+
+                return Ok(None);
             },
         };
 

@@ -37,6 +37,8 @@ use matrix_sdk::{
     room::Room as MatrixRoom,
     ruma::{
         events::{
+            poll::start::PollKind,
+            poll::unstable_start::UnstablePollStartContentBlock,
             reaction::ReactionEvent,
             relation::{Replacement, Thread},
             room::encrypted::RoomEncryptedEvent,
@@ -181,6 +183,11 @@ pub enum MessageAction {
     /// and error when it doesn't recognize it. The second [bool] argument forces it to be
     /// interpreted literally when it is `true`.
     Unreact(Option<String>, bool),
+
+    /// Vote on a poll with the selected option.
+    ///
+    /// The [String] is either a 1-indexed option number or a partial option name.
+    Vote(String),
 }
 
 /// An action taken in the currently selected space.
@@ -489,6 +496,9 @@ pub enum SendAction {
 
     /// Upload the image data.
     UploadImage(usize, usize, Cow<'static, [u8]>),
+
+    /// Send a new poll to the room.
+    Poll(String, Vec<String>),
 }
 
 /// An action performed against the user's homeserver.
@@ -692,6 +702,16 @@ pub type IambResult<T> = UIResult<T, IambInfo>;
 /// The event identifier used as a key here is the ID for the reaction, and not for the message
 /// it's reacting to.
 pub type MessageReactions = HashMap<OwnedEventId, (String, OwnedUserId)>;
+
+/// State of a poll, including its question, answers, and accumulated votes.
+#[derive(Clone, Debug)]
+pub struct PollState {
+    pub question: String,
+    pub answers: Vec<(String, String)>,
+    pub votes: HashMap<OwnedUserId, Vec<String>>,
+    pub kind: PollKind,
+    pub ended: bool,
+}
 
 /// Errors encountered during application use.
 #[derive(thiserror::Error, Debug)]
@@ -907,6 +927,9 @@ pub struct RoomInfo {
     /// A map of message identifiers to a map of reaction events.
     pub reactions: HashMap<OwnedEventId, MessageReactions>,
 
+    /// A map of poll start event IDs to their poll state.
+    pub polls: HashMap<OwnedEventId, PollState>,
+
     /// A map of message identifiers to thread replies.
     threads: HashMap<OwnedEventId, Messages>,
 
@@ -940,6 +963,7 @@ impl Default for RoomInfo {
             event_receipts: Default::default(),
             user_receipts: Default::default(),
             reactions: Default::default(),
+            polls: Default::default(),
             threads: Default::default(),
             fetching: Default::default(),
             fetch_id: Default::default(),
@@ -1094,6 +1118,55 @@ impl RoomInfo {
         }
     }
 
+    /// Insert a new poll from an unstable poll start event.
+    pub fn insert_poll(&mut self, event_id: OwnedEventId, poll_start: &UnstablePollStartContentBlock) {
+        let question = poll_start.question.text.clone();
+        let answers = poll_start
+            .answers
+            .iter()
+            .map(|a| (a.id.clone(), a.text.clone()))
+            .collect();
+        let state = PollState {
+            question,
+            answers,
+            votes: HashMap::new(),
+            kind: poll_start.kind.clone(),
+            ended: false,
+        };
+        self.polls.insert(event_id, state);
+    }
+
+    /// Record a vote on a poll.
+    pub fn insert_poll_response(
+        &mut self,
+        poll_id: &EventId,
+        sender: OwnedUserId,
+        selections: Vec<String>,
+    ) {
+        if let Some(poll) = self.polls.get_mut(poll_id) {
+            if !poll.ended {
+                poll.votes.insert(sender, selections);
+            }
+        }
+    }
+
+    /// Mark a poll as ended.
+    pub fn end_poll(&mut self, poll_id: &EventId) {
+        if let Some(poll) = self.polls.get_mut(poll_id) {
+            poll.ended = true;
+        }
+    }
+
+    /// Get the poll state for an event ID.
+    pub fn get_poll(&self, event_id: &EventId) -> Option<&PollState> {
+        self.polls.get(event_id)
+    }
+
+    /// Get mutable access to the messages collection.
+    pub fn messages_mut(&mut self) -> &mut Messages {
+        &mut self.messages
+    }
+
     /// Insert an edit.
     pub fn insert_edit(&mut self, msg: Replacement<RoomMessageEventContentWithoutRelation>) {
         let event_id = msg.event_id;
@@ -1125,7 +1198,8 @@ impl RoomInfo {
             MessageEvent::Redacted(_) |
             MessageEvent::State(_) |
             MessageEvent::EncryptedOriginal(_) |
-            MessageEvent::EncryptedRedacted(_) => {
+            MessageEvent::EncryptedRedacted(_) |
+            MessageEvent::Poll(..) => {
                 return;
             },
         }

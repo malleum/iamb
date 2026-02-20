@@ -18,6 +18,8 @@ use unicode_width::UnicodeWidthStr;
 
 use matrix_sdk::ruma::{
     events::{
+        poll::start::PollKind,
+        poll::unstable_start::UnstablePollStartContentBlock,
         relation::Thread,
         room::{
             encrypted::{
@@ -60,7 +62,7 @@ use ratatui_image::protocol::Protocol;
 
 use crate::config::ImagePreviewSize;
 use crate::{
-    base::RoomInfo,
+    base::{PollState, RoomInfo},
     config::ApplicationSettings,
     message::html::{parse_matrix_html, StyleTree},
     util::{replace_emojis_in_str, space, space_span, take_width, wrapped_text},
@@ -467,6 +469,7 @@ pub enum MessageEvent {
     Redacted(Box<RedactedRoomMessageEvent>),
     State(Box<AnySyncStateEvent>),
     Local(OwnedEventId, Box<RoomMessageEventContent>),
+    Poll(OwnedEventId, OwnedUserId, MilliSecondsSinceUnixEpoch, UnstablePollStartContentBlock),
 }
 
 impl MessageEvent {
@@ -478,6 +481,7 @@ impl MessageEvent {
             MessageEvent::Redacted(ev) => ev.event_id.as_ref(),
             MessageEvent::State(ev) => ev.event_id(),
             MessageEvent::Local(event_id, _) => event_id.as_ref(),
+            MessageEvent::Poll(event_id, _, _, _) => event_id.as_ref(),
         }
     }
 
@@ -489,6 +493,7 @@ impl MessageEvent {
             MessageEvent::Redacted(_) => None,
             MessageEvent::State(_) => None,
             MessageEvent::Local(_, content) => Some(content),
+            MessageEvent::Poll(..) => None,
         }
     }
 
@@ -507,6 +512,7 @@ impl MessageEvent {
             MessageEvent::Redacted(ev) => body_cow_reason(&ev.unsigned),
             MessageEvent::State(ev) => body_cow_state(ev),
             MessageEvent::Local(_, content) => body_cow_content(content),
+            MessageEvent::Poll(_, _, _, poll) => Cow::Owned(format!("Poll: {}", poll.question.text)),
         }
     }
 
@@ -518,6 +524,7 @@ impl MessageEvent {
             MessageEvent::Redacted(_) => return None,
             MessageEvent::State(ev) => return Some(html_state(ev)),
             MessageEvent::Local(_, content) => content,
+            MessageEvent::Poll(..) => return None,
         };
 
         if let MessageType::Text(content) = &content.msgtype {
@@ -538,6 +545,7 @@ impl MessageEvent {
             MessageEvent::Redacted(_) => return,
             MessageEvent::State(_) => return,
             MessageEvent::Local(_, _) => return,
+            MessageEvent::Poll(..) => return,
             MessageEvent::Original(ev) => {
                 let redacted = RedactedRoomMessageEvent {
                     content: ev.content.clone().redact(rules),
@@ -838,6 +846,87 @@ impl<'a> MessageFormatter<'a> {
         }
     }
 
+    fn push_poll(
+        &mut self,
+        poll: &'a PollState,
+        user_id: &OwnedUserId,
+        style: Style,
+        text: &mut Text<'a>,
+    ) {
+        let bold = style.add_modifier(StyleModifier::BOLD);
+        let bar_width: usize = 10;
+        let width = self.width();
+
+        // Question header
+        let mut header = printer::TextPrinter::new(width, style, false, self.settings);
+        let label = if poll.ended { "Poll [Closed]: " } else { "Poll: " };
+        header.push_str(label, bold);
+        header.push_str(&poll.question, bold);
+        self.push_text(header.finish(), style, text);
+
+        // Count votes per answer
+        let mut answer_counts: Vec<usize> = vec![0; poll.answers.len()];
+        for selections in poll.votes.values() {
+            for sel in selections {
+                if let Some(idx) = poll.answers.iter().position(|(id, _)| id == sel) {
+                    answer_counts[idx] += 1;
+                }
+            }
+        }
+        let total_votes = poll.votes.len();
+
+        // Get user's votes
+        let user_selections: Vec<String> = poll
+            .votes
+            .get(user_id)
+            .cloned()
+            .unwrap_or_default();
+
+        let is_disclosed = poll.kind == PollKind::Disclosed || poll.ended;
+
+        for (idx, (answer_id, answer_text)) in poll.answers.iter().enumerate() {
+            let voted = user_selections.contains(answer_id);
+
+            // Build the line as a single owned string, then push it
+            let mut line_str = format!(" [{}] ", idx + 1);
+
+            if is_disclosed {
+                let count = answer_counts[idx];
+                let pct = if total_votes > 0 {
+                    (count as f64 / total_votes as f64 * 100.0) as u32
+                } else {
+                    0
+                };
+
+                line_str.push_str(&format!("{:<16} ", answer_text));
+
+                let filled = if total_votes > 0 {
+                    (count * bar_width) / total_votes
+                } else {
+                    0
+                };
+                let empty = bar_width.saturating_sub(filled);
+                for _ in 0..filled {
+                    line_str.push('\u{2588}');
+                }
+                for _ in 0..empty {
+                    line_str.push('\u{2591}');
+                }
+
+                line_str.push_str(&format!(" {} ({}%)", count, pct));
+            } else {
+                line_str.push_str(answer_text);
+            }
+
+            if voted {
+                line_str.push_str(" \u{2713}");
+            }
+
+            let line = Line::from(Span::styled(line_str, style));
+            text.lines.push(line);
+        }
+    }
+
     fn push_thread_reply_count(&mut self, len: usize, text: &mut Text<'a>) {
         if len == 0 {
             return;
@@ -920,6 +1009,7 @@ impl Message {
             MessageEvent::Original(ev) => &ev.content,
             MessageEvent::Redacted(_) => return None,
             MessageEvent::State(_) => return None,
+            MessageEvent::Poll(..) => return None,
         };
 
         match &content.relates_to {
@@ -941,6 +1031,7 @@ impl Message {
             MessageEvent::Original(ev) => &ev.content,
             MessageEvent::Redacted(_) => return None,
             MessageEvent::State(_) => return None,
+            MessageEvent::Poll(..) => return None,
         };
 
         match &content.relates_to {
@@ -1076,6 +1167,15 @@ impl Message {
         if text.lines.is_empty() {
             // If there was nothing in the body, just show an empty message.
             fmt.push_spans(space_span(width, style).into(), style, &mut text);
+        }
+
+        if settings.tunables.poll_display {
+            if let MessageEvent::Poll(_, _, _, _) = &self.event {
+                if let Some(poll) = info.get_poll(self.event.event_id()) {
+                    let user_id = &settings.profile.user_id;
+                    fmt.push_poll(poll, user_id, style, &mut text);
+                }
+            }
         }
 
         if settings.tunables.reaction_display {

@@ -564,6 +564,7 @@ pub struct TunableValues {
     pub timestamp_command: Option<Vec<String>>,
     pub reaction_display: bool,
     pub reaction_shortcode_display: bool,
+    pub poll_display: bool,
     pub read_receipt_send: bool,
     pub read_receipt_display: bool,
     pub request_timeout: u64,
@@ -592,6 +593,7 @@ pub struct Tunables {
     pub timestamp_command: Option<Vec<String>>,
     pub reaction_display: Option<bool>,
     pub reaction_shortcode_display: Option<bool>,
+    pub poll_display: Option<bool>,
     pub read_receipt_send: Option<bool>,
     pub read_receipt_display: Option<bool>,
     pub request_timeout: Option<u64>,
@@ -626,6 +628,7 @@ impl Tunables {
             reaction_shortcode_display: self
                 .reaction_shortcode_display
                 .or(other.reaction_shortcode_display),
+            poll_display: self.poll_display.or(other.poll_display),
             read_receipt_send: self.read_receipt_send.or(other.read_receipt_send),
             read_receipt_display: self.read_receipt_display.or(other.read_receipt_display),
             request_timeout: self.request_timeout.or(other.request_timeout),
@@ -657,6 +660,7 @@ impl Tunables {
             timestamp_command: self.timestamp_command,
             reaction_display: self.reaction_display.unwrap_or(true),
             reaction_shortcode_display: self.reaction_shortcode_display.unwrap_or(false),
+            poll_display: self.poll_display.unwrap_or(true),
             read_receipt_send: self.read_receipt_send.unwrap_or(true),
             read_receipt_display: self.read_receipt_display.unwrap_or(true),
             request_timeout: self.request_timeout.unwrap_or(DEFAULT_REQ_TIMEOUT),

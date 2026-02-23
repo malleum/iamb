@@ -762,6 +762,10 @@ impl ChatState {
         &self.room_id
     }
 
+    pub fn selected_event_id(&self, info: &mut RoomInfo) -> Option<OwnedEventId> {
+        self.scrollback.get_key(info).map(|(_, event_id)| event_id)
+    }
+
     pub fn auto_toggle_focus(
         &mut self,
         act: &EditorAction,

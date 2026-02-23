@@ -805,11 +805,17 @@ impl<'a> MessageFormatter<'a> {
         proto
     }
 
-    fn push_reactions(&mut self, counts: Vec<(&'a str, usize)>, style: Style, text: &mut Text<'a>) {
+    fn push_reactions(
+        &mut self,
+        counts: Vec<(&'a str, usize, bool)>,
+        style: Style,
+        text: &mut Text<'a>,
+        settings: &ApplicationSettings,
+    ) {
         let mut emojis = printer::TextPrinter::new(self.width(), style, false, self.settings);
         let mut reactions = 0;
 
-        for (key, count) in counts {
+        for (key, count, self_reacted) in counts {
             if reactions != 0 {
                 emojis.push_str(" ", style);
             }
@@ -832,11 +838,18 @@ impl<'a> MessageFormatter<'a> {
                 key
             };
 
-            emojis.push_str("[", style);
-            emojis.push_str(name, style);
-            emojis.push_str(" ", style);
-            emojis.push_span_nobreak(Span::styled(count.to_string(), style));
-            emojis.push_str("]", style);
+            let react_style = if self_reacted {
+                let color = settings.get_user_color(&settings.profile.user_id);
+                style.fg(color)
+            } else {
+                style
+            };
+
+            emojis.push_str("[", react_style);
+            emojis.push_str(name, react_style);
+            emojis.push_str(" ", react_style);
+            emojis.push_span_nobreak(Span::styled(count.to_string(), react_style));
+            emojis.push_str("]", react_style);
 
             reactions += 1;
         }
@@ -1179,8 +1192,9 @@ impl Message {
         }
 
         if settings.tunables.reaction_display {
-            let reactions = info.get_reactions(self.event.event_id());
-            fmt.push_reactions(reactions, style, &mut text);
+            let user_id = &settings.profile.user_id;
+            let reactions = info.get_reactions(self.event.event_id(), user_id);
+            fmt.push_reactions(reactions, style, &mut text, settings);
         }
 
         if let Some(thread) = info.get_thread(Some(self.event.event_id())) {

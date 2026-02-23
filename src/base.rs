@@ -466,6 +466,9 @@ pub enum RoomAction {
     /// Open the members window.
     Members(Box<CommandContext>),
 
+    /// Open the reactions window for the selected message.
+    Reactions(Box<CommandContext>),
+
     /// Search messages and open a results window.
     Search(String, Box<CommandContext>),
 
@@ -1021,22 +1024,32 @@ impl RoomInfo {
     }
 
     /// Get the reactions and their counts for a message.
-    pub fn get_reactions(&self, event_id: &EventId) -> Vec<(&str, usize)> {
+    ///
+    /// The boolean indicates whether `user_id` has reacted with that emoji.
+    pub fn get_reactions(
+        &self,
+        event_id: &EventId,
+        user_id: &UserId,
+    ) -> Vec<(&str, usize, bool)> {
         if let Some(reacts) = self.reactions.get(event_id) {
-            let mut counts = HashMap::new();
+            let mut counts: HashMap<&str, (usize, bool)> = HashMap::new();
 
             let mut seen_user_reactions = BTreeSet::new();
 
             for (key, user) in reacts.values() {
                 if !seen_user_reactions.contains(&(key, user)) {
                     seen_user_reactions.insert((key, user));
-                    let count = counts.entry(key.as_str()).or_default();
-                    *count += 1;
+                    let entry = counts.entry(key.as_str()).or_default();
+                    entry.0 += 1;
+                    if user == user_id {
+                        entry.1 = true;
+                    }
                 }
             }
 
-            let mut reactions = counts.into_iter().collect::<Vec<_>>();
-            reactions.sort();
+            let mut reactions: Vec<(&str, usize, bool)> =
+                counts.into_iter().map(|(k, (c, me))| (k, c, me)).collect();
+            reactions.sort_by(|a, b| a.0.cmp(b.0));
 
             reactions
         } else {
@@ -1701,6 +1714,9 @@ pub struct ChatStore {
 
     /// Pending scrollback jump target set by search results, consumed by scrollback render.
     pub pending_scrollback_jump: Option<(OwnedRoomId, MessageKey)>,
+
+    /// Pending event_id for the reactions window to consume on open.
+    pub pending_reactions_event_id: Option<OwnedEventId>,
 }
 
 impl ChatStore {
@@ -1728,6 +1744,7 @@ impl ChatStore {
             open_notifications: Default::default(),
             pending_search_pattern: None,
             pending_scrollback_jump: None,
+            pending_reactions_event_id: None,
         }
     }
 
@@ -1803,6 +1820,9 @@ pub enum IambId {
 
     /// The `:search` results window for a given Matrix room.
     SearchResults(OwnedRoomId),
+
+    /// The `:reactions` window for a given message in a room.
+    Reactions(OwnedRoomId, OwnedEventId),
 }
 
 impl Display for IambId {
@@ -1826,6 +1846,9 @@ impl Display for IambId {
             IambId::UnreadList => f.write_str("iamb://unreads"),
             IambId::SearchResults(room_id) => {
                 write!(f, "iamb://search/{room_id}")
+            },
+            IambId::Reactions(room_id, event_id) => {
+                write!(f, "iamb://reactions/{room_id}/{event_id}")
             },
         }
     }
@@ -1980,6 +2003,26 @@ impl Visitor<'_> for IambIdVisitor {
 
                 Ok(IambId::SearchResults(room_id))
             },
+            Some("reactions") => {
+                let Some(path) = url.path_segments() else {
+                    return Err(E::custom("Invalid reactions window URL"));
+                };
+
+                let segments = path.collect::<Vec<_>>();
+                let &[room_id, event_id] = segments.as_slice() else {
+                    return Err(E::custom("Invalid reactions window URL"));
+                };
+
+                let Ok(room_id) = OwnedRoomId::try_from(room_id) else {
+                    return Err(E::custom("Invalid room identifier"));
+                };
+
+                let Ok(event_id) = OwnedEventId::try_from(event_id) else {
+                    return Err(E::custom("Invalid event identifier"));
+                };
+
+                Ok(IambId::Reactions(room_id, event_id))
+            },
             Some(s) => Err(E::custom(format!("{s:?} is not a valid window"))),
             None => Err(E::custom("Invalid iamb window URL")),
         }
@@ -2053,6 +2096,9 @@ pub enum IambBufferId {
 
     /// The `:search` results window for a room.
     SearchResults(OwnedRoomId),
+
+    /// The `:reactions` window for a message in a room.
+    Reactions(OwnedRoomId, OwnedEventId),
 }
 
 impl IambBufferId {
@@ -2070,6 +2116,9 @@ impl IambBufferId {
             IambBufferId::ChatList => IambId::ChatList,
             IambBufferId::UnreadList => IambId::UnreadList,
             IambBufferId::SearchResults(room) => IambId::SearchResults(room.clone()),
+            IambBufferId::Reactions(room, event) => {
+                IambId::Reactions(room.clone(), event.clone())
+            },
         };
 
         Some(id)
@@ -2115,6 +2164,7 @@ impl Completer<IambInfo> for IambCompleter {
             IambBufferId::ChatList => vec![],
             IambBufferId::UnreadList => vec![],
             IambBufferId::SearchResults(_) => vec![],
+            IambBufferId::Reactions(_, _) => vec![],
         }
     }
 }
@@ -2352,10 +2402,20 @@ pub mod tests {
             ));
         }
 
-        assert_eq!(info.get_reactions(&owned_event_id!("$my_reaction")), vec![
-            ("🏠", 1),
-            ("🙂", 2)
-        ]);
+        assert_eq!(
+            info.get_reactions(
+                &owned_event_id!("$my_reaction"),
+                &owned_user_id!("@foo:example.org")
+            ),
+            vec![("🏠", 1, true), ("🙂", 2, true)]
+        );
+        assert_eq!(
+            info.get_reactions(
+                &owned_event_id!("$my_reaction"),
+                &owned_user_id!("@baz:example.org")
+            ),
+            vec![("🏠", 1, false), ("🙂", 2, false)]
+        );
     }
 
     #[test]

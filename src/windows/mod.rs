@@ -18,6 +18,7 @@ use matrix_sdk::{
     ruma::{
         events::room::member::MembershipState,
         events::tag::{TagName, Tags},
+        OwnedEventId,
         OwnedRoomAliasId,
         OwnedRoomId,
         OwnedUserId,
@@ -325,6 +326,7 @@ macro_rules! delegate {
             IambWindow::Room($id) => $e,
             IambWindow::DirectList($id) => $e,
             IambWindow::MemberList($id, _, _) => $e,
+            IambWindow::Reactions($id, _, _) => $e,
             IambWindow::SearchResults($id, _, _) => $e,
             IambWindow::RoomList($id) => $e,
             IambWindow::SpaceList($id) => $e,
@@ -339,6 +341,7 @@ macro_rules! delegate {
 pub enum IambWindow {
     DirectList(DirectListState),
     MemberList(MemberListState, OwnedRoomId, Option<Instant>),
+    Reactions(ReactionListState, OwnedRoomId, OwnedEventId),
     Room(RoomState),
     SearchResults(SearchResultsListState, OwnedRoomId, String),
     VerifyList(VerifyListState),
@@ -687,6 +690,31 @@ impl WindowOps<IambInfo> for IambWindow {
                     .render(area, buf, state);
             },
             IambWindow::Welcome(state) => state.draw(area, buf, focused, store),
+            IambWindow::Reactions(state, room_id, event_id) => {
+                let info = store.application.rooms.get_or_default(room_id.clone());
+                let mut items = Vec::new();
+
+                if let Some(reactions) = info.reactions.get(event_id) {
+                    let mut seen = std::collections::BTreeSet::new();
+                    for (emoji, user_id) in reactions.values() {
+                        if seen.insert((emoji.clone(), user_id.clone())) {
+                            items.push(ReactionItem {
+                                emoji: emoji.clone(),
+                                user_id: user_id.clone(),
+                                room_id: room_id.clone(),
+                            });
+                        }
+                    }
+                }
+
+                state.set(items);
+
+                List::new(store)
+                    .empty_message("No reactions on this message")
+                    .empty_alignment(Alignment::Center)
+                    .focus(focused)
+                    .render(area, buf, state);
+            },
             IambWindow::SearchResults(state, room_id, pattern) => {
                 // Re-run the search over all currently loaded messages.
                 if let Ok(needle) = regex::Regex::new(pattern) {
@@ -754,6 +782,9 @@ impl WindowOps<IambInfo> for IambWindow {
             IambWindow::Welcome(w) => w.dup(store).into(),
             IambWindow::ChatList(w) => w.dup(store).into(),
             IambWindow::UnreadList(w) => w.dup(store).into(),
+            IambWindow::Reactions(w, room_id, event_id) => {
+                IambWindow::Reactions(w.dup(store), room_id.clone(), event_id.clone())
+            },
             IambWindow::SearchResults(w, room_id, pattern) => {
                 IambWindow::SearchResults(w.dup(store), room_id.clone(), pattern.clone())
             },
@@ -798,6 +829,9 @@ impl Window<IambInfo> for IambWindow {
             IambWindow::Welcome(_) => IambId::Welcome,
             IambWindow::ChatList(_) => IambId::ChatList,
             IambWindow::UnreadList(_) => IambId::UnreadList,
+            IambWindow::Reactions(_, room_id, event_id) => {
+                IambId::Reactions(room_id.clone(), event_id.clone())
+            },
             IambWindow::SearchResults(_, room_id, _) => IambId::SearchResults(room_id.clone()),
         }
     }
@@ -824,6 +858,14 @@ impl Window<IambInfo> for IambWindow {
                     bold_span("Room Members "),
                     Span::styled(format!("({n}): "), bold_style()),
                     title.into(),
+                ];
+                Line::from(v)
+            },
+            IambWindow::Reactions(state, _, _) => {
+                let n = state.len();
+                let v = vec![
+                    bold_span("Reactions "),
+                    Span::styled(format!("({n})"), bold_style()),
                 ];
                 Line::from(v)
             },
@@ -861,6 +903,14 @@ impl Window<IambInfo> for IambWindow {
                     bold_span("Room Members "),
                     Span::styled(format!("({n}): "), bold_style()),
                     title.into(),
+                ];
+                Line::from(v)
+            },
+            IambWindow::Reactions(state, _, _) => {
+                let n = state.len();
+                let v = vec![
+                    bold_span("Reactions "),
+                    Span::styled(format!("({n})"), bold_style()),
                 ];
                 Line::from(v)
             },
@@ -930,6 +980,11 @@ impl Window<IambInfo> for IambWindow {
                 let list = UnreadListState::new(IambBufferId::UnreadList, vec![]);
 
                 Ok(IambWindow::UnreadList(list))
+            },
+            IambId::Reactions(room_id, event_id) => {
+                let id = IambBufferId::Reactions(room_id.clone(), event_id.clone());
+                let list = ReactionListState::new(id, vec![]);
+                Ok(IambWindow::Reactions(list, room_id, event_id))
             },
             IambId::SearchResults(room_id) => {
                 let id = IambBufferId::SearchResults(room_id.clone());
@@ -1827,6 +1882,87 @@ impl Promptable<ProgramContext, ProgramStore, IambInfo> for SearchResultItem {
         }
     }
 }
+
+#[derive(Clone)]
+pub struct ReactionItem {
+    emoji: String,
+    user_id: OwnedUserId,
+    room_id: OwnedRoomId,
+}
+
+impl Display for ReactionItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{} {}", self.emoji, self.user_id)
+    }
+}
+
+impl ListItem<IambInfo> for ReactionItem {
+    fn show(
+        &self,
+        selected: bool,
+        _: &ViewportContext<ListCursor>,
+        store: &mut ProgramStore,
+    ) -> Text<'_> {
+        let info = store.application.rooms.get_or_default(self.room_id.clone());
+        let user_id = &self.user_id;
+
+        let (color, name) = store.application.settings.get_user_overrides(user_id);
+        let color = color.unwrap_or_else(|| super::config::user_color(user_id.as_str()));
+        let mut style = super::config::user_style_from_color(color);
+
+        if selected {
+            style = style.add_modifier(StyleModifier::REVERSED);
+        }
+
+        let mut spans = vec![Span::styled(self.emoji.as_str(), selected_style(selected))];
+        spans.push(Span::styled(" ", selected_style(selected)));
+
+        if let Some(name) = name {
+            spans.push(Span::styled(name, style));
+            spans.push(Span::styled(" (", style));
+            spans.push(Span::styled(user_id.as_str(), style));
+            spans.push(Span::styled(")", style));
+        } else if let Some(display) = info.display_names.get(user_id) {
+            spans.push(Span::styled(display.clone(), style));
+            spans.push(Span::styled(" (", style));
+            spans.push(Span::styled(user_id.as_str(), style));
+            spans.push(Span::styled(")", style));
+        } else {
+            spans.push(Span::styled(user_id.as_str(), style));
+        }
+
+        Line::from(spans).into()
+    }
+
+    fn get_word(&self) -> Option<String> {
+        self.user_id.to_string().into()
+    }
+}
+
+impl Promptable<ProgramContext, ProgramStore, IambInfo> for ReactionItem {
+    fn prompt(
+        &mut self,
+        act: &PromptAction,
+        _: &ProgramContext,
+        _: &mut ProgramStore,
+    ) -> EditResult<Vec<(ProgramAction, ProgramContext)>, IambInfo> {
+        match act {
+            PromptAction::Submit => Ok(vec![]),
+            PromptAction::Abort(_) => {
+                let msg = "Cannot abort entry inside a list";
+                let err = EditError::Failure(msg.into());
+                Err(err)
+            },
+            PromptAction::Recall(..) => {
+                let msg = "Cannot recall history inside a list";
+                let err = EditError::Failure(msg.into());
+                Err(err)
+            },
+        }
+    }
+}
+
+pub type ReactionListState = ListState<ReactionItem, IambInfo>;
 
 #[cfg(test)]
 mod tests {

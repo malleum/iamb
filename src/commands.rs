@@ -297,6 +297,17 @@ fn iamb_replied(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     return Ok(step);
 }
 
+fn iamb_reactions(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    if !desc.arg.text.is_empty() {
+        return Result::Err(CommandError::InvalidArgument);
+    }
+
+    let open = IambAction::Room(RoomAction::Reactions(ctx.clone().into()));
+    let step = CommandStep::Continue(open.into(), ctx.context.clone());
+
+    return Ok(step);
+}
+
 fn iamb_search(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     let pattern = desc.arg.text.trim().to_string();
 
@@ -818,6 +829,11 @@ fn add_iamb_commands(cmds: &mut ProgramCommands) {
         name: "members".into(),
         aliases: vec![],
         f: iamb_members,
+    });
+    cmds.add_command(ProgramCommand {
+        name: "reactions".into(),
+        aliases: vec![],
+        f: iamb_reactions,
     });
     cmds.add_command(ProgramCommand {
         name: "react".into(),

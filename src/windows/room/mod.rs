@@ -350,6 +350,31 @@ impl RoomState {
 
                 Ok(vec![(act, cmd.context.clone())])
             },
+            RoomAction::Reactions(mut cmd) => {
+                let chat = match self {
+                    RoomState::Chat(chat) => chat,
+                    RoomState::Space(_) => return Err(IambError::NoSelectedRoom.into()),
+                };
+
+                let info = store.application.rooms.get_or_default(chat.id().to_owned());
+                let event_id = chat
+                    .selected_event_id(info)
+                    .ok_or(IambError::NoSelectedMessage)?;
+
+                store.application.pending_reactions_event_id = Some(event_id.clone());
+
+                let width = Count::Exact(40);
+                let act =
+                    cmd.default_axis(Axis::Vertical).default_relation(MoveDir1D::Next).window(
+                        OpenTarget::Application(IambId::Reactions(
+                            chat.id().to_owned(),
+                            event_id,
+                        )),
+                        width.into(),
+                    );
+
+                Ok(vec![(act, cmd.context.clone())])
+            },
             RoomAction::Search(pattern, mut cmd) => {
                 store.application.pending_search_pattern = Some(pattern);
                 let width = Count::Exact(45);

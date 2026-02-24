@@ -360,6 +360,47 @@ fn load_insert(
                     AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::Reaction(ev)) => {
                         info.insert_reaction(ev);
                     },
+                    AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::UnstablePollStart(ev)) => {
+                        if let Some(original) = ev.as_original() {
+                            let poll_start = original.content.poll_start();
+                            let event_id = original.event_id.clone();
+                            let sender = original.sender.clone();
+                            let timestamp = original.origin_server_ts;
+
+                            info.insert_poll(event_id.clone(), poll_start);
+
+                            let poll_content = poll_start.clone();
+                            let msg_event = crate::message::MessageEvent::Poll(
+                                event_id.clone(),
+                                sender.clone(),
+                                timestamp,
+                                poll_content,
+                            );
+                            let msg = crate::message::Message::new(
+                                msg_event,
+                                sender,
+                                timestamp.into(),
+                            );
+                            let key = (timestamp.into(), event_id.clone());
+                            let loc = crate::base::EventLocation::Message(None, key.clone());
+                            info.keys.insert(event_id, loc);
+                            info.messages_mut().insert_message(key, msg);
+                        }
+                    },
+                    AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::UnstablePollResponse(ev)) => {
+                        if let Some(original) = ev.as_original() {
+                            let poll_id = &original.content.relates_to.event_id;
+                            let sender = original.sender.clone();
+                            let selections = original.content.poll_response.answers.clone();
+                            info.insert_poll_response(poll_id, sender, selections);
+                        }
+                    },
+                    AnyTimelineEvent::MessageLike(AnyMessageLikeEvent::UnstablePollEnd(ev)) => {
+                        if let Some(original) = ev.as_original() {
+                            let poll_id = &original.content.relates_to.event_id;
+                            info.end_poll(poll_id);
+                        }
+                    },
                     AnyTimelineEvent::MessageLike(_) => {
                         continue;
                     },

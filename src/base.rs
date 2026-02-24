@@ -933,6 +933,13 @@ pub struct RoomInfo {
     /// A map of poll start event IDs to their poll state.
     pub polls: HashMap<OwnedEventId, PollState>,
 
+    /// Edits that arrived before their original message was loaded.
+    pub pending_edits: HashMap<OwnedEventId, Replacement<RoomMessageEventContentWithoutRelation>>,
+    /// Poll responses that arrived before their poll start was loaded.
+    pub pending_poll_responses: HashMap<OwnedEventId, Vec<(OwnedUserId, Vec<String>)>>,
+    /// Poll ends that arrived before their poll start was loaded.
+    pub pending_poll_ends: HashSet<OwnedEventId>,
+
     /// A map of message identifiers to thread replies.
     threads: HashMap<OwnedEventId, Messages>,
 
@@ -967,6 +974,9 @@ impl Default for RoomInfo {
             user_receipts: Default::default(),
             reactions: Default::default(),
             polls: Default::default(),
+            pending_edits: Default::default(),
+            pending_poll_responses: Default::default(),
+            pending_poll_ends: Default::default(),
             threads: Default::default(),
             fetching: Default::default(),
             fetch_id: Default::default(),
@@ -1146,7 +1156,25 @@ impl RoomInfo {
             kind: poll_start.kind.clone(),
             ended: false,
         };
-        self.polls.insert(event_id, state);
+        self.polls.insert(event_id.clone(), state);
+
+        // Apply pending responses that arrived before the poll start.
+        if let Some(responses) = self.pending_poll_responses.remove(&event_id) {
+            for (sender, selections) in responses {
+                if let Some(poll) = self.polls.get_mut(&event_id) {
+                    if !poll.ended {
+                        poll.votes.insert(sender, selections);
+                    }
+                }
+            }
+        }
+
+        // Apply pending end that arrived before the poll start.
+        if self.pending_poll_ends.remove(&event_id) {
+            if let Some(poll) = self.polls.get_mut(&event_id) {
+                poll.ended = true;
+            }
+        }
     }
 
     /// Record a vote on a poll.
@@ -1160,6 +1188,12 @@ impl RoomInfo {
             if !poll.ended {
                 poll.votes.insert(sender, selections);
             }
+        } else {
+            // Poll not loaded yet; store for later application.
+            self.pending_poll_responses
+                .entry(poll_id.to_owned())
+                .or_default()
+                .push((sender, selections));
         }
     }
 
@@ -1167,6 +1201,9 @@ impl RoomInfo {
     pub fn end_poll(&mut self, poll_id: &EventId) {
         if let Some(poll) = self.polls.get_mut(poll_id) {
             poll.ended = true;
+        } else {
+            // Poll not loaded yet; store for later application.
+            self.pending_poll_ends.insert(poll_id.to_owned());
         }
     }
 
@@ -1182,6 +1219,13 @@ impl RoomInfo {
 
     /// Insert an edit.
     pub fn insert_edit(&mut self, msg: Replacement<RoomMessageEventContentWithoutRelation>) {
+        if !self.keys.contains_key(&msg.event_id) {
+            // Original not loaded yet; store for later application.
+            // Use or_insert to keep the first (newest) edit seen during backward loading.
+            self.pending_edits.entry(msg.event_id.clone()).or_insert(msg);
+            return;
+        }
+
         let event_id = msg.event_id;
         let new_msgtype = msg.new_content;
 
@@ -1282,11 +1326,34 @@ impl RoomInfo {
     /// Insert a new message.
     pub fn insert_message(&mut self, msg: RoomMessageEvent) {
         let event_id = msg.event_id().to_owned();
+
+        // Extract bundled replacement from unsigned before consuming the event.
+        let bundled_edit = if let RoomMessageEvent::Original(ref ev) = msg {
+            ev.unsigned.relations.replace.as_ref().and_then(|replace_ev| {
+                match &replace_ev.content.relates_to {
+                    Some(Relation::Replacement(repl)) => Some(repl.clone()),
+                    _ => None,
+                }
+            })
+        } else {
+            None
+        };
+
         let key = (msg.origin_server_ts().into(), event_id.clone());
 
         let loc = EventLocation::Message(None, key.clone());
-        self.keys.insert(event_id, loc);
+        self.keys.insert(event_id.clone(), loc);
         self.messages.insert_message(key, msg);
+
+        // Apply bundled edit from unsigned.relations.replace.
+        if let Some(repl) = bundled_edit {
+            self.insert_edit(repl);
+        }
+
+        // Apply any pending edit that arrived before this message.
+        if let Some(pending) = self.pending_edits.remove(&event_id) {
+            self.insert_edit(pending);
+        }
     }
 
     fn insert_thread(&mut self, msg: RoomMessageEvent, thread_root: OwnedEventId) {
@@ -1298,8 +1365,13 @@ impl RoomInfo {
             .entry(thread_root.clone())
             .or_insert_with(|| Messages::thread(thread_root.clone()));
         let loc = EventLocation::Message(Some(thread_root), key.clone());
-        self.keys.insert(event_id, loc);
+        self.keys.insert(event_id.clone(), loc);
         replies.insert_message(key, msg);
+
+        // Apply any pending edit that arrived before this message.
+        if let Some(pending) = self.pending_edits.remove(&event_id) {
+            self.insert_edit(pending);
+        }
     }
 
     /// Insert a new message event.

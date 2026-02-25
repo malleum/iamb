@@ -51,7 +51,7 @@
         commonArgs = {
           inherit src;
           strictDeps = true;
-          pname = "jiamb";
+          pname = "iamb";
           version = self.shortRev or self.dirtyShortRev;
         };
 

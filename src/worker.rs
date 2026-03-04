@@ -56,6 +56,7 @@ use matrix_sdk::{
                 member::OriginalSyncRoomMemberEvent,
                 message::{MessageType, RoomMessageEventContent},
                 name::RoomNameEventContent,
+                pinned_events::RoomPinnedEventsEventContent,
                 redaction::OriginalSyncRoomRedactionEvent,
             },
             tag::Tags,
@@ -1215,6 +1216,22 @@ impl ClientWorker {
                 },
             );
         }
+
+        let _ = self.client.add_event_handler(
+            |ev: SyncStateEvent<RoomPinnedEventsEventContent>,
+             room: MatrixRoom,
+             store: Ctx<AsyncProgramStore>| {
+                async move {
+                    let room_id = room.room_id();
+                    let mut locked = store.lock().await;
+                    let info = locked.application.get_room_info(room_id.to_owned());
+
+                    if let Some(original) = ev.as_original() {
+                        info.pinned_messages = original.content.pinned.clone();
+                    }
+                }
+            },
+        );
 
         let _ = self.client.add_event_handler(
             |ev: OriginalSyncRoomRedactionEvent,

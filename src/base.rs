@@ -933,6 +933,9 @@ pub struct RoomInfo {
     /// A map of poll start event IDs to their poll state.
     pub polls: HashMap<OwnedEventId, PollState>,
 
+    /// The pinned event IDs for this room, synced from `m.room.pinned_events`.
+    pub pinned_messages: Vec<OwnedEventId>,
+
     /// Edits that arrived before their original message was loaded.
     pub pending_edits: HashMap<OwnedEventId, Replacement<RoomMessageEventContentWithoutRelation>>,
     /// Poll responses that arrived before their poll start was loaded.
@@ -974,6 +977,7 @@ impl Default for RoomInfo {
             user_receipts: Default::default(),
             reactions: Default::default(),
             polls: Default::default(),
+            pinned_messages: Default::default(),
             pending_edits: Default::default(),
             pending_poll_responses: Default::default(),
             pending_poll_ends: Default::default(),
@@ -1210,6 +1214,18 @@ impl RoomInfo {
     /// Get the poll state for an event ID.
     pub fn get_poll(&self, event_id: &EventId) -> Option<&PollState> {
         self.polls.get(event_id)
+    }
+
+    /// Pin an event by ID. No-op if already pinned.
+    pub fn pin_message(&mut self, event_id: OwnedEventId) {
+        if !self.pinned_messages.contains(&event_id) {
+            self.pinned_messages.push(event_id);
+        }
+    }
+
+    /// Unpin an event by ID. No-op if not pinned.
+    pub fn unpin_message(&mut self, event_id: &EventId) {
+        self.pinned_messages.retain(|id: &OwnedEventId| id != event_id);
     }
 
     /// Get mutable access to the messages collection.

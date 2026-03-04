@@ -327,6 +327,7 @@ macro_rules! delegate {
             IambWindow::DirectList($id) => $e,
             IambWindow::MemberList($id, _, _) => $e,
             IambWindow::Reactions($id, _, _) => $e,
+            IambWindow::PinList($id, _) => $e,
             IambWindow::SearchResults($id, _, _) => $e,
             IambWindow::RoomList($id) => $e,
             IambWindow::SpaceList($id) => $e,
@@ -342,6 +343,7 @@ pub enum IambWindow {
     DirectList(DirectListState),
     MemberList(MemberListState, OwnedRoomId, Option<Instant>),
     Reactions(ReactionListState, OwnedRoomId, OwnedEventId),
+    PinList(PinListState, OwnedRoomId),
     Room(RoomState),
     SearchResults(SearchResultsListState, OwnedRoomId, String),
     VerifyList(VerifyListState),
@@ -715,6 +717,41 @@ impl WindowOps<IambInfo> for IambWindow {
                     .focus(focused)
                     .render(area, buf, state);
             },
+            IambWindow::PinList(state, room_id) => {
+                let info = store.application.rooms.get_or_default(room_id.clone());
+                let mut items = Vec::new();
+
+                for event_id in info.pinned_messages.clone() {
+                    let key = info.get_message_key(&event_id).cloned();
+                    let (sender, preview) = if let Some(msg) = info.get_event(&event_id) {
+                        let sender = msg.sender.to_string();
+                        let body = msg.event.body();
+                        let preview = if body.len() > 80 {
+                            format!("{}…", &body[..80])
+                        } else {
+                            body.into_owned()
+                        };
+                        (sender, preview)
+                    } else {
+                        (event_id.to_string(), "(message not loaded)".into())
+                    };
+
+                    items.push(PinItem {
+                        event_id,
+                        room_id: room_id.clone(),
+                        key,
+                        sender,
+                        preview,
+                    });
+                }
+                state.set(items);
+
+                List::new(store)
+                    .empty_message("No pinned messages in this room")
+                    .empty_alignment(Alignment::Center)
+                    .focus(focused)
+                    .render(area, buf, state);
+            },
             IambWindow::SearchResults(state, room_id, pattern) => {
                 // Re-run the search over all currently loaded messages.
                 if let Ok(needle) = regex::Regex::new(pattern) {
@@ -785,6 +822,9 @@ impl WindowOps<IambInfo> for IambWindow {
             IambWindow::Reactions(w, room_id, event_id) => {
                 IambWindow::Reactions(w.dup(store), room_id.clone(), event_id.clone())
             },
+            IambWindow::PinList(w, room_id) => {
+                IambWindow::PinList(w.dup(store), room_id.clone())
+            },
             IambWindow::SearchResults(w, room_id, pattern) => {
                 IambWindow::SearchResults(w.dup(store), room_id.clone(), pattern.clone())
             },
@@ -832,6 +872,7 @@ impl Window<IambInfo> for IambWindow {
             IambWindow::Reactions(_, room_id, event_id) => {
                 IambId::Reactions(room_id.clone(), event_id.clone())
             },
+            IambWindow::PinList(_, room_id) => IambId::PinList(room_id.clone()),
             IambWindow::SearchResults(_, room_id, _) => IambId::SearchResults(room_id.clone()),
         }
     }
@@ -865,6 +906,14 @@ impl Window<IambInfo> for IambWindow {
                 let n = state.len();
                 let v = vec![
                     bold_span("Reactions "),
+                    Span::styled(format!("({n})"), bold_style()),
+                ];
+                Line::from(v)
+            },
+            IambWindow::PinList(state, _) => {
+                let n = state.len();
+                let v = vec![
+                    bold_span("Pins "),
                     Span::styled(format!("({n})"), bold_style()),
                 ];
                 Line::from(v)
@@ -910,6 +959,14 @@ impl Window<IambInfo> for IambWindow {
                 let n = state.len();
                 let v = vec![
                     bold_span("Reactions "),
+                    Span::styled(format!("({n})"), bold_style()),
+                ];
+                Line::from(v)
+            },
+            IambWindow::PinList(state, _) => {
+                let n = state.len();
+                let v = vec![
+                    bold_span("Pins "),
                     Span::styled(format!("({n})"), bold_style()),
                 ];
                 Line::from(v)
@@ -999,8 +1056,10 @@ impl Window<IambInfo> for IambWindow {
                 let list = SearchResultsListState::new(id, vec![]);
                 Ok(IambWindow::SearchResults(list, room_id, pattern))
             },
-            IambId::PinList(_) => {
-                Err(IambError::NoSelectedRoom.into())
+            IambId::PinList(room_id) => {
+                let id = IambBufferId::PinList(room_id.clone());
+                let list = PinListState::new(id, vec![]);
+                Ok(IambWindow::PinList(list, room_id))
             },
         }
     }

@@ -188,6 +188,12 @@ pub enum MessageAction {
     ///
     /// The [String] is either a 1-indexed option number or a partial option name.
     Vote(String),
+
+    /// Pin the currently selected message.
+    Pin,
+
+    /// Unpin the currently selected message.
+    Unpin,
 }
 
 /// An action taken in the currently selected space.
@@ -468,6 +474,9 @@ pub enum RoomAction {
 
     /// Open the reactions window for the selected message.
     Reactions(Box<CommandContext>),
+
+    /// Open the pins window for this room.
+    PinList(Box<CommandContext>),
 
     /// Search messages and open a results window.
     Search(String, Box<CommandContext>),
@@ -1911,6 +1920,9 @@ pub enum IambId {
 
     /// The `:reactions` window for a given message in a room.
     Reactions(OwnedRoomId, OwnedEventId),
+
+    /// The `:pins` window for a given Matrix room.
+    PinList(OwnedRoomId),
 }
 
 impl Display for IambId {
@@ -1937,6 +1949,9 @@ impl Display for IambId {
             },
             IambId::Reactions(room_id, event_id) => {
                 write!(f, "iamb://reactions/{room_id}/{event_id}")
+            },
+            IambId::PinList(room_id) => {
+                write!(f, "iamb://pins/{room_id}")
             },
         }
     }
@@ -2111,6 +2126,21 @@ impl Visitor<'_> for IambIdVisitor {
 
                 Ok(IambId::Reactions(room_id, event_id))
             },
+            Some("pins") => {
+                let Some(path) = url.path_segments() else {
+                    return Err(E::custom("Invalid pins window URL"));
+                };
+
+                let &[room_id] = path.collect::<Vec<_>>().as_slice() else {
+                    return Err(E::custom("Invalid pins window URL"));
+                };
+
+                let room_id = OwnedRoomId::try_from(room_id).map_err(|e| {
+                    E::custom(format!("Invalid room ID in pins window URL: {e}"))
+                })?;
+
+                Ok(IambId::PinList(room_id))
+            },
             Some(s) => Err(E::custom(format!("{s:?} is not a valid window"))),
             None => Err(E::custom("Invalid iamb window URL")),
         }
@@ -2187,6 +2217,9 @@ pub enum IambBufferId {
 
     /// The `:reactions` window for a message in a room.
     Reactions(OwnedRoomId, OwnedEventId),
+
+    /// The `:pins` window for a room.
+    PinList(OwnedRoomId),
 }
 
 impl IambBufferId {
@@ -2207,6 +2240,7 @@ impl IambBufferId {
             IambBufferId::Reactions(room, event) => {
                 IambId::Reactions(room.clone(), event.clone())
             },
+            IambBufferId::PinList(room) => IambId::PinList(room.clone()),
         };
 
         Some(id)

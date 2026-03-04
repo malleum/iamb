@@ -2287,6 +2287,7 @@ impl Completer<IambInfo> for IambCompleter {
             IambBufferId::UnreadList => vec![],
             IambBufferId::SearchResults(_) => vec![],
             IambBufferId::Reactions(_, _) => vec![],
+            IambBufferId::PinList(_) => vec![],
         }
     }
 }

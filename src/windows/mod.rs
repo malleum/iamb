@@ -999,6 +999,9 @@ impl Window<IambInfo> for IambWindow {
                 let list = SearchResultsListState::new(id, vec![]);
                 Ok(IambWindow::SearchResults(list, room_id, pattern))
             },
+            IambId::PinList(_) => {
+                Err(IambError::NoSelectedRoom.into())
+            },
         }
     }
 
@@ -1963,6 +1966,77 @@ impl Promptable<ProgramContext, ProgramStore, IambInfo> for ReactionItem {
 }
 
 pub type ReactionListState = ListState<ReactionItem, IambInfo>;
+
+#[derive(Clone)]
+pub struct PinItem {
+    event_id: OwnedEventId,
+    room_id: OwnedRoomId,
+    key: Option<MessageKey>,
+    sender: String,
+    preview: String,
+}
+
+impl Display for PinItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: {}", self.sender, self.preview)
+    }
+}
+
+impl ListItem<IambInfo> for PinItem {
+    fn show(
+        &self,
+        selected: bool,
+        _: &ViewportContext<ListCursor>,
+        _: &mut ProgramStore,
+    ) -> Text<'_> {
+        let style = if selected {
+            Style::default().add_modifier(StyleModifier::REVERSED)
+        } else {
+            Style::default()
+        };
+
+        let sender_span = Span::styled(self.sender.clone(), style);
+        let colon_span = Span::styled(": ", style);
+        let preview_span = Span::styled(self.preview.clone(), style);
+
+        Line::from(vec![sender_span, colon_span, preview_span]).into()
+    }
+
+    fn get_word(&self) -> Option<String> {
+        self.event_id.to_string().into()
+    }
+}
+
+impl Promptable<ProgramContext, ProgramStore, IambInfo> for PinItem {
+    fn prompt(
+        &mut self,
+        act: &PromptAction,
+        _: &ProgramContext,
+        store: &mut ProgramStore,
+    ) -> EditResult<Vec<(ProgramAction, ProgramContext)>, IambInfo> {
+        match act {
+            PromptAction::Submit => {
+                if let Some(key) = &self.key {
+                    store.application.pending_scrollback_jump =
+                        Some((self.room_id.clone(), key.clone()));
+                }
+                Ok(vec![])
+            },
+            PromptAction::Abort(_) => {
+                let msg = "Cannot abort entry inside a list";
+                let err = EditError::Failure(msg.into());
+                Err(err)
+            },
+            PromptAction::Recall(..) => {
+                let msg = "Cannot recall history inside a list";
+                let err = EditError::Failure(msg.into());
+                Err(err)
+            },
+        }
+    }
+}
+
+pub type PinListState = ListState<PinItem, IambInfo>;
 
 #[cfg(test)]
 mod tests {

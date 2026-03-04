@@ -308,6 +308,39 @@ fn iamb_reactions(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult
     return Ok(step);
 }
 
+fn iamb_pin(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    if !desc.arg.text.is_empty() {
+        return Result::Err(CommandError::InvalidArgument);
+    }
+
+    let act = IambAction::Message(MessageAction::Pin);
+    let step = CommandStep::Continue(act.into(), ctx.context.clone());
+
+    return Ok(step);
+}
+
+fn iamb_unpin(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    if !desc.arg.text.is_empty() {
+        return Result::Err(CommandError::InvalidArgument);
+    }
+
+    let act = IambAction::Message(MessageAction::Unpin);
+    let step = CommandStep::Continue(act.into(), ctx.context.clone());
+
+    return Ok(step);
+}
+
+fn iamb_pins(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    if !desc.arg.text.is_empty() {
+        return Result::Err(CommandError::InvalidArgument);
+    }
+
+    let open = IambAction::Room(RoomAction::PinList(ctx.clone().into()));
+    let step = CommandStep::Continue(open.into(), ctx.context.clone());
+
+    return Ok(step);
+}
+
 fn iamb_search(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     let pattern = desc.arg.text.trim().to_string();
 
@@ -834,6 +867,21 @@ fn add_iamb_commands(cmds: &mut ProgramCommands) {
         name: "reactions".into(),
         aliases: vec![],
         f: iamb_reactions,
+    });
+    cmds.add_command(ProgramCommand {
+        name: "pin".into(),
+        aliases: vec![],
+        f: iamb_pin,
+    });
+    cmds.add_command(ProgramCommand {
+        name: "unpin".into(),
+        aliases: vec![],
+        f: iamb_unpin,
+    });
+    cmds.add_command(ProgramCommand {
+        name: "pins".into(),
+        aliases: vec![],
+        f: iamb_pins,
     });
     cmds.add_command(ProgramCommand {
         name: "react".into(),

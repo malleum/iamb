@@ -32,6 +32,7 @@ use matrix_sdk::{
             RoomMessageEventContent,
             TextMessageEventContent,
         },
+        events::room::pinned_events::RoomPinnedEventsEventContent,
         OwnedEventId,
         OwnedRoomId,
         RoomId,
@@ -585,6 +586,74 @@ impl ChatState {
                 let _ = room.send(response).await.map_err(IambError::from)?;
 
                 Ok(None)
+            },
+            MessageAction::Pin => {
+                let room = self.get_joined(&store.application.worker)?;
+                let event_id = match &msg.event {
+                    MessageEvent::EncryptedOriginal(ev) => ev.event_id.clone(),
+                    MessageEvent::EncryptedRedacted(ev) => ev.event_id.clone(),
+                    MessageEvent::Original(ev) => ev.event_id.clone(),
+                    MessageEvent::Local(event_id, _) => event_id.clone(),
+                    MessageEvent::State(ev) => ev.event_id().to_owned(),
+                    MessageEvent::Poll(event_id, _, _, _) => event_id.clone(),
+                    MessageEvent::Redacted(_) => {
+                        return Err(UIError::Failure("Cannot pin a redacted message".into()));
+                    },
+                };
+
+                let mut pinned = room
+                    .load_pinned_events()
+                    .await
+                    .map_err(IambError::from)?
+                    .unwrap_or_default();
+
+                if pinned.contains(&event_id) {
+                    return Err(UIError::Failure("Message is already pinned".into()));
+                }
+
+                pinned.push(event_id);
+                room.send_state_event(RoomPinnedEventsEventContent::new(pinned.clone()))
+                    .await
+                    .map_err(IambError::from)?;
+
+                let info = store.application.rooms.get_or_default(self.room_id.clone());
+                info.pinned_messages = pinned;
+
+                Ok(Some(InfoMessage::from("Message pinned")))
+            },
+            MessageAction::Unpin => {
+                let room = self.get_joined(&store.application.worker)?;
+                let event_id = match &msg.event {
+                    MessageEvent::EncryptedOriginal(ev) => ev.event_id.clone(),
+                    MessageEvent::EncryptedRedacted(ev) => ev.event_id.clone(),
+                    MessageEvent::Original(ev) => ev.event_id.clone(),
+                    MessageEvent::Local(event_id, _) => event_id.clone(),
+                    MessageEvent::State(ev) => ev.event_id().to_owned(),
+                    MessageEvent::Poll(event_id, _, _, _) => event_id.clone(),
+                    MessageEvent::Redacted(_) => {
+                        return Err(UIError::Failure("Cannot unpin a redacted message".into()));
+                    },
+                };
+
+                let mut pinned = room
+                    .load_pinned_events()
+                    .await
+                    .map_err(IambError::from)?
+                    .unwrap_or_default();
+
+                if !pinned.contains(&event_id) {
+                    return Err(UIError::Failure("Message is not pinned".into()));
+                }
+
+                pinned.retain(|id| id != &event_id);
+                room.send_state_event(RoomPinnedEventsEventContent::new(pinned.clone()))
+                    .await
+                    .map_err(IambError::from)?;
+
+                let info = store.application.rooms.get_or_default(self.room_id.clone());
+                info.pinned_messages = pinned;
+
+                Ok(Some(InfoMessage::from("Message unpinned")))
             },
         }
     }

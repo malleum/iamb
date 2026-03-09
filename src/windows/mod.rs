@@ -328,6 +328,7 @@ macro_rules! delegate {
             IambWindow::MemberList($id, _, _) => $e,
             IambWindow::Reactions($id, _, _) => $e,
             IambWindow::PinList($id, _) => $e,
+            IambWindow::CallMembers($id, _) => $e,
             IambWindow::SearchResults($id, _, _) => $e,
             IambWindow::RoomList($id) => $e,
             IambWindow::SpaceList($id) => $e,
@@ -344,6 +345,7 @@ pub enum IambWindow {
     MemberList(MemberListState, OwnedRoomId, Option<Instant>),
     Reactions(ReactionListState, OwnedRoomId, OwnedEventId),
     PinList(PinListState, OwnedRoomId),
+    CallMembers(CallMemberListState, OwnedRoomId),
     Room(RoomState),
     SearchResults(SearchResultsListState, OwnedRoomId, String),
     VerifyList(VerifyListState),
@@ -752,6 +754,24 @@ impl WindowOps<IambInfo> for IambWindow {
                     .focus(focused)
                     .render(area, buf, state);
             },
+            IambWindow::CallMembers(state, room_id) => {
+                let info = store.application.rooms.get_or_default(room_id.clone());
+                let items: Vec<CallMemberItem> = info
+                    .call_members
+                    .iter()
+                    .map(|user_id| CallMemberItem {
+                        user_id: user_id.clone(),
+                        room_id: room_id.clone(),
+                    })
+                    .collect();
+                state.set(items);
+
+                List::new(store)
+                    .empty_message("No active call in this room")
+                    .empty_alignment(Alignment::Center)
+                    .focus(focused)
+                    .render(area, buf, state);
+            },
             IambWindow::SearchResults(state, room_id, pattern) => {
                 // Re-run the search over all currently loaded messages.
                 if let Ok(needle) = regex::Regex::new(pattern) {
@@ -825,6 +845,9 @@ impl WindowOps<IambInfo> for IambWindow {
             IambWindow::PinList(w, room_id) => {
                 IambWindow::PinList(w.dup(store), room_id.clone())
             },
+            IambWindow::CallMembers(w, room_id) => {
+                IambWindow::CallMembers(w.dup(store), room_id.clone())
+            },
             IambWindow::SearchResults(w, room_id, pattern) => {
                 IambWindow::SearchResults(w.dup(store), room_id.clone(), pattern.clone())
             },
@@ -873,6 +896,7 @@ impl Window<IambInfo> for IambWindow {
                 IambId::Reactions(room_id.clone(), event_id.clone())
             },
             IambWindow::PinList(_, room_id) => IambId::PinList(room_id.clone()),
+            IambWindow::CallMembers(_, room_id) => IambId::CallMembers(room_id.clone()),
             IambWindow::SearchResults(_, room_id, _) => IambId::SearchResults(room_id.clone()),
         }
     }
@@ -914,6 +938,14 @@ impl Window<IambInfo> for IambWindow {
                 let n = state.len();
                 let v = vec![
                     bold_span("Pins "),
+                    Span::styled(format!("({n})"), bold_style()),
+                ];
+                Line::from(v)
+            },
+            IambWindow::CallMembers(state, _) => {
+                let n = state.len();
+                let v = vec![
+                    bold_span("Call Members "),
                     Span::styled(format!("({n})"), bold_style()),
                 ];
                 Line::from(v)
@@ -967,6 +999,14 @@ impl Window<IambInfo> for IambWindow {
                 let n = state.len();
                 let v = vec![
                     bold_span("Pins "),
+                    Span::styled(format!("({n})"), bold_style()),
+                ];
+                Line::from(v)
+            },
+            IambWindow::CallMembers(state, _) => {
+                let n = state.len();
+                let v = vec![
+                    bold_span("Call Members "),
                     Span::styled(format!("({n})"), bold_style()),
                 ];
                 Line::from(v)
@@ -1060,6 +1100,11 @@ impl Window<IambInfo> for IambWindow {
                 let id = IambBufferId::PinList(room_id.clone());
                 let list = PinListState::new(id, vec![]);
                 Ok(IambWindow::PinList(list, room_id))
+            },
+            IambId::CallMembers(room_id) => {
+                let id = IambBufferId::CallMembers(room_id.clone());
+                let list = CallMemberListState::new(id, vec![]);
+                Ok(IambWindow::CallMembers(list, room_id))
             },
         }
     }
@@ -2096,6 +2141,85 @@ impl Promptable<ProgramContext, ProgramStore, IambInfo> for PinItem {
 }
 
 pub type PinListState = ListState<PinItem, IambInfo>;
+
+#[derive(Clone)]
+pub struct CallMemberItem {
+    user_id: OwnedUserId,
+    room_id: OwnedRoomId,
+}
+
+impl Display for CallMemberItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.user_id)
+    }
+}
+
+impl ListItem<IambInfo> for CallMemberItem {
+    fn show(
+        &self,
+        selected: bool,
+        _: &ViewportContext<ListCursor>,
+        store: &mut ProgramStore,
+    ) -> Text<'_> {
+        let info = store.application.rooms.get_or_default(self.room_id.clone());
+        let user_id = &self.user_id;
+
+        let (color, name) = store.application.settings.get_user_overrides(user_id);
+        let color = color.unwrap_or_else(|| super::config::user_color(user_id.as_str()));
+        let mut style = super::config::user_style_from_color(color);
+
+        if selected {
+            style = style.add_modifier(StyleModifier::REVERSED);
+        }
+
+        let mut spans = Vec::new();
+
+        if let Some(name) = name {
+            spans.push(Span::styled(name, style));
+            spans.push(Span::styled(" (", style));
+            spans.push(Span::styled(user_id.as_str(), style));
+            spans.push(Span::styled(")", style));
+        } else if let Some(display) = info.display_names.get(user_id) {
+            spans.push(Span::styled(display.clone(), style));
+            spans.push(Span::styled(" (", style));
+            spans.push(Span::styled(user_id.as_str(), style));
+            spans.push(Span::styled(")", style));
+        } else {
+            spans.push(Span::styled(user_id.as_str(), style));
+        }
+
+        Line::from(spans).into()
+    }
+
+    fn get_word(&self) -> Option<String> {
+        self.user_id.to_string().into()
+    }
+}
+
+impl Promptable<ProgramContext, ProgramStore, IambInfo> for CallMemberItem {
+    fn prompt(
+        &mut self,
+        act: &PromptAction,
+        _: &ProgramContext,
+        _: &mut ProgramStore,
+    ) -> EditResult<Vec<(ProgramAction, ProgramContext)>, IambInfo> {
+        match act {
+            PromptAction::Submit => Ok(vec![]),
+            PromptAction::Abort(_) => {
+                let msg = "Cannot abort entry inside a list";
+                let err = EditError::Failure(msg.into());
+                Err(err)
+            },
+            PromptAction::Recall(..) => {
+                let msg = "Cannot recall history inside a list";
+                let err = EditError::Failure(msg.into());
+                Err(err)
+            },
+        }
+    }
+}
+
+pub type CallMemberListState = ListState<CallMemberItem, IambInfo>;
 
 #[cfg(test)]
 mod tests {

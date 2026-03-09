@@ -58,6 +58,7 @@ use matrix_sdk::{
                 name::RoomNameEventContent,
                 redaction::OriginalSyncRoomRedactionEvent,
             },
+            call::member::CallMemberEventContent,
             room::pinned_events::RoomPinnedEventsEventContent,
             tag::Tags,
             typing::SyncTypingEvent,
@@ -406,6 +407,10 @@ fn load_insert(
                         continue;
                     },
                     AnyTimelineEvent::State(msg) => {
+                        // Skip CallMember events in scrollback history
+                        if matches!(&msg, matrix_sdk::ruma::events::AnyStateEvent::CallMember(_)) {
+                            continue;
+                        }
                         if settings.tunables.state_event_display {
                             info.insert_any_state(msg.into());
                         }
@@ -1207,6 +1212,11 @@ impl ClientWorker {
             let _ = self.client.add_event_handler(
                 |ev: AnySyncStateEvent, room: MatrixRoom, store: Ctx<AsyncProgramStore>| {
                     async move {
+                        // CallMember events are handled by the dedicated handler above
+                        if matches!(&ev, AnySyncStateEvent::CallMember(_)) {
+                            return;
+                        }
+
                         let room_id = room.room_id();
                         let mut locked = store.lock().await;
 
@@ -1228,6 +1238,46 @@ impl ClientWorker {
 
                     if let Some(original) = ev.as_original() {
                         info.pinned_messages = original.content.pinned.clone();
+                    }
+                }
+            },
+        );
+
+        let state_event_display = self.settings.tunables.state_event_display;
+        let _ = self.client.add_event_handler(
+            move |ev: SyncStateEvent<CallMemberEventContent>,
+                  room: MatrixRoom,
+                  store: Ctx<AsyncProgramStore>| {
+                async move {
+                    let room_id = room.room_id();
+                    let mut locked = store.lock().await;
+                    let info = locked.application.get_room_info(room_id.to_owned());
+
+                    if let Some(original) = ev.as_original() {
+                        let user_id = original.state_key.user_id().to_owned();
+                        let is_active = !original
+                            .content
+                            .active_memberships(Some(original.origin_server_ts))
+                            .is_empty();
+
+                        let prev_count = info.call_members.len();
+
+                        if is_active {
+                            info.call_members.insert(user_id);
+                        } else {
+                            info.call_members.remove(&user_id);
+                        }
+
+                        let new_count = info.call_members.len();
+
+                        if state_event_display {
+                            // Only show message on call start or end transitions
+                            if (prev_count == 0 && new_count > 0)
+                                || (prev_count > 0 && new_count == 0)
+                            {
+                                info.insert_any_state(ev.into());
+                            }
+                        }
                     }
                 }
             },

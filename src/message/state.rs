@@ -331,8 +331,14 @@ pub fn body_cow_state(ev: &AnySyncStateEvent) -> Cow<'static, str> {
         AnyFullStateEventContent::BeaconInfo(FullStateEventContent::Original { .. }) => {
             return Cow::Borrowed("* shared beacon information");
         },
-        AnyFullStateEventContent::CallMember(FullStateEventContent::Original { .. }) => {
-            return Cow::Borrowed("* updated membership for room call");
+        AnyFullStateEventContent::CallMember(FullStateEventContent::Original {
+            content, ..
+        }) => {
+            if content.active_memberships(None).is_empty() {
+                return Cow::Borrowed("* The call has ended");
+            } else {
+                return Cow::Borrowed("* A call has started");
+            }
         },
         AnyFullStateEventContent::MemberHints(FullStateEventContent::Original {
             content, ..
@@ -806,10 +812,14 @@ pub fn html_state(ev: &AnySyncStateEvent) -> StyleTree {
         AnyFullStateEventContent::BeaconInfo(FullStateEventContent::Original { .. }) => {
             vec![StyleTreeNode::Text("* shared beacon information".into())]
         },
-        AnyFullStateEventContent::CallMember(FullStateEventContent::Original { .. }) => {
-            vec![StyleTreeNode::Text(
-                "* updated membership for room call".into(),
-            )]
+        AnyFullStateEventContent::CallMember(FullStateEventContent::Original {
+            content, ..
+        }) => {
+            if content.active_memberships(None).is_empty() {
+                vec![StyleTreeNode::Text("* The call has ended".into())]
+            } else {
+                vec![StyleTreeNode::Text("* A call has started".into())]
+            }
         },
         AnyFullStateEventContent::MemberHints(FullStateEventContent::Original {
             content, ..

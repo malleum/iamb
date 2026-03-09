@@ -341,6 +341,17 @@ fn iamb_pins(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     return Ok(step);
 }
 
+fn iamb_call_members(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    if !desc.arg.text.is_empty() {
+        return Result::Err(CommandError::InvalidArgument);
+    }
+
+    let open = IambAction::Room(RoomAction::CallMembers(ctx.clone().into()));
+    let step = CommandStep::Continue(open.into(), ctx.context.clone());
+
+    return Ok(step);
+}
+
 fn iamb_search(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     let pattern = desc.arg.text.trim().to_string();
 
@@ -882,6 +893,11 @@ fn add_iamb_commands(cmds: &mut ProgramCommands) {
         name: "pins".into(),
         aliases: vec![],
         f: iamb_pins,
+    });
+    cmds.add_command(ProgramCommand {
+        name: "call-members".into(),
+        aliases: vec![],
+        f: iamb_call_members,
     });
     cmds.add_command(ProgramCommand {
         name: "react".into(),

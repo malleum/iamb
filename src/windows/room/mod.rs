@@ -701,6 +701,16 @@ impl RoomState {
 
                 Ok(vec![(act, cmd.context.clone())])
             },
+            RoomAction::CallMembers(mut cmd) => {
+                let width = Count::Exact(45);
+                let act =
+                    cmd.default_axis(Axis::Vertical).default_relation(MoveDir1D::Next).window(
+                        OpenTarget::Application(IambId::CallMembers(self.id().to_owned())),
+                        width.into(),
+                    );
+
+                Ok(vec![(act, cmd.context.clone())])
+            },
         }
     }
 

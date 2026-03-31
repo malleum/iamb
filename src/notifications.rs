@@ -21,6 +21,14 @@ use crate::{
     config::{ApplicationSettings, NotifyVia},
 };
 
+fn is_call_member_event(raw: &Raw<AnySyncTimelineEvent>) -> bool {
+    if let Ok(AnySyncTimelineEvent::State(ref ev)) = raw.deserialize() {
+        matches!(ev, matrix_sdk::ruma::events::AnySyncStateEvent::CallMember(_))
+    } else {
+        false
+    }
+}
+
 const IAMB_XDG_NAME: &str = match option_env!("IAMB_XDG_NAME") {
     None => "iamb",
     Some(iamb) => iamb,
@@ -76,6 +84,10 @@ pub async fn register_notifications(
                 let room_id = room.room_id().to_owned();
                 match notification.event {
                     RawAnySyncOrStrippedTimelineEvent::Sync(e) => {
+                        // Skip call membership events
+                        if is_call_member_event(&e) {
+                            return;
+                        }
                         match parse_full_notification(e, room, show_message).await {
                             Ok((summary, body, server_ts)) => {
                                 if server_ts < startup_ts {

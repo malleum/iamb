@@ -1243,7 +1243,6 @@ impl ClientWorker {
             },
         );
 
-        let state_event_display = self.settings.tunables.state_event_display;
         let _ = self.client.add_event_handler(
             move |ev: SyncStateEvent<CallMemberEventContent>,
                   room: MatrixRoom,
@@ -1260,23 +1259,10 @@ impl ClientWorker {
                             .active_memberships(Some(original.origin_server_ts))
                             .is_empty();
 
-                        let prev_count = info.call_members.len();
-
                         if is_active {
                             info.call_members.insert(user_id);
                         } else {
                             info.call_members.remove(&user_id);
-                        }
-
-                        let new_count = info.call_members.len();
-
-                        if state_event_display {
-                            // Only show message on call start or end transitions
-                            if (prev_count == 0 && new_count > 0)
-                                || (prev_count > 0 && new_count == 0)
-                            {
-                                info.insert_any_state(ev.into());
-                            }
                         }
                     }
                 }

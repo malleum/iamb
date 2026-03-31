@@ -127,14 +127,23 @@ fn selected_text(s: &str, selected: bool) -> Text<'_> {
     Text::from(selected_span(s, selected))
 }
 
-fn name_and_labels(name: &str, unread: bool, style: Style) -> (Span<'_>, Vec<Vec<Span<'_>>>) {
+fn name_and_labels(
+    name: &str,
+    unread: bool,
+    has_active_call: bool,
+    style: Style,
+) -> (Span<'_>, Vec<Vec<Span<'_>>>) {
     let name_style = if unread {
         style.add_modifier(StyleModifier::BOLD)
     } else {
         style
     };
 
-    let name = Span::styled(name, name_style);
+    let name = if has_active_call {
+        Span::styled(format!("\u{1F4DE} {name}"), name_style)
+    } else {
+        Span::styled(name, name_style)
+    };
     let labels = if unread {
         vec![vec![Span::styled("Unread", style)]]
     } else {
@@ -1147,6 +1156,7 @@ pub struct GenericChatItem {
     alias: Option<OwnedRoomAliasId>,
     unread: UnreadInfo,
     is_dm: bool,
+    has_active_call: bool,
 }
 
 impl GenericChatItem {
@@ -1164,7 +1174,9 @@ impl GenericChatItem {
             store.application.names.insert(alias.to_string(), room_id.to_owned());
         }
 
-        GenericChatItem { room_info, name, alias, is_dm, unread }
+        let has_active_call = !info.call_members.is_empty();
+
+        GenericChatItem { room_info, name, alias, is_dm, unread, has_active_call }
     }
 
     #[inline]
@@ -1227,7 +1239,7 @@ impl ListItem<IambInfo> for GenericChatItem {
     ) -> Text<'_> {
         let unread = self.unread.is_unread();
         let style = selected_style(selected);
-        let (name, mut labels) = name_and_labels(&self.name, unread, style);
+        let (name, mut labels) = name_and_labels(&self.name, unread, self.has_active_call, style);
         let mut spans = vec![name];
 
         labels.push(if self.is_dm {
@@ -1266,6 +1278,7 @@ pub struct RoomItem {
     name: String,
     alias: Option<OwnedRoomAliasId>,
     unread: UnreadInfo,
+    has_active_call: bool,
 }
 
 impl RoomItem {
@@ -1283,7 +1296,9 @@ impl RoomItem {
             store.application.names.insert(alias.to_string(), room_id.to_owned());
         }
 
-        RoomItem { room_info, name, alias, unread }
+        let has_active_call = !info.call_members.is_empty();
+
+        RoomItem { room_info, name, alias, unread, has_active_call }
     }
 
     #[inline]
@@ -1346,7 +1361,7 @@ impl ListItem<IambInfo> for RoomItem {
     ) -> Text<'_> {
         let unread = self.unread.is_unread();
         let style = selected_style(selected);
-        let (name, mut labels) = name_and_labels(&self.name, unread, style);
+        let (name, mut labels) = name_and_labels(&self.name, unread, self.has_active_call, style);
         let mut spans = vec![name];
 
         if let Some(tags) = &self.tags() {
@@ -1380,6 +1395,7 @@ pub struct DirectItem {
     name: String,
     alias: Option<OwnedRoomAliasId>,
     unread: UnreadInfo,
+    has_active_call: bool,
 }
 
 impl DirectItem {
@@ -1392,7 +1408,9 @@ impl DirectItem {
         let unread = info.unreads(&store.application.settings);
         info.tags.clone_from(&room_info.deref().1);
 
-        DirectItem { room_info, name, alias, unread }
+        let has_active_call = !info.call_members.is_empty();
+
+        DirectItem { room_info, name, alias, unread, has_active_call }
     }
 
     #[inline]
@@ -1455,7 +1473,7 @@ impl ListItem<IambInfo> for DirectItem {
     ) -> Text<'_> {
         let unread = self.unread.is_unread();
         let style = selected_style(selected);
-        let (name, mut labels) = name_and_labels(&self.name, unread, style);
+        let (name, mut labels) = name_and_labels(&self.name, unread, self.has_active_call, style);
         let mut spans = vec![name];
 
         if let Some(tags) = &self.tags() {

@@ -895,7 +895,7 @@ fn add_iamb_commands(cmds: &mut ProgramCommands) {
         f: iamb_pins,
     });
     cmds.add_command(ProgramCommand {
-        name: "call-members".into(),
+        name: "callmembers".into(),
         aliases: vec![],
         f: iamb_call_members,
     });

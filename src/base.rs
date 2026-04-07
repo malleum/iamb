@@ -1931,7 +1931,7 @@ pub enum IambId {
     /// The `:pins` window for a given Matrix room.
     PinList(OwnedRoomId),
 
-    /// The `:call-members` window for a given Matrix room.
+    /// The `:callmembers` window for a given Matrix room.
     CallMembers(OwnedRoomId),
 }
 
@@ -1964,7 +1964,7 @@ impl Display for IambId {
                 write!(f, "iamb://pins/{room_id}")
             },
             IambId::CallMembers(room_id) => {
-                write!(f, "iamb://call-members/{room_id}")
+                write!(f, "iamb://callmembers/{room_id}")
             },
         }
     }
@@ -2154,17 +2154,17 @@ impl Visitor<'_> for IambIdVisitor {
 
                 Ok(IambId::PinList(room_id))
             },
-            Some("call-members") => {
+            Some("callmembers") => {
                 let Some(path) = url.path_segments() else {
-                    return Err(E::custom("Invalid call-members window URL"));
+                    return Err(E::custom("Invalid callmembers window URL"));
                 };
 
                 let &[room_id] = path.collect::<Vec<_>>().as_slice() else {
-                    return Err(E::custom("Invalid call-members window URL"));
+                    return Err(E::custom("Invalid callmembers window URL"));
                 };
 
                 let room_id = OwnedRoomId::try_from(room_id).map_err(|e| {
-                    E::custom(format!("Invalid room ID in call-members window URL: {e}"))
+                    E::custom(format!("Invalid room ID in callmembers window URL: {e}"))
                 })?;
 
                 Ok(IambId::CallMembers(room_id))
@@ -2249,7 +2249,7 @@ pub enum IambBufferId {
     /// The `:pins` window for a room.
     PinList(OwnedRoomId),
 
-    /// The `:call-members` window for a room.
+    /// The `:callmembers` window for a room.
     CallMembers(OwnedRoomId),
 }
 
